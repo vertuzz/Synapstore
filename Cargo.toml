@@ -1,0 +1,46 @@
+[package]
+name = "synapstore"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Lightweight, self-contained, ACID-compliant memory for AI agents: HNSW vectors + knowledge graph + episodic log in a single redb file, served over MCP."
+readme = "README.md"
+keywords = ["mcp", "vector-database", "hnsw", "knowledge-graph", "agents"]
+categories = ["database-implementations", "command-line-utilities"]
+exclude = ["/bench/results", "/target"]
+
+[lib]
+name = "synapstore"
+path = "src/lib.rs"
+
+[[bin]]
+name = "synapstore"
+path = "src/main.rs"
+
+[dependencies]
+# Strict dependency budget (PRD §2): pure Rust, no C bindings.
+redb = "5.0"
+rkyv = { version = "0.8", default-features = false, features = ["std", "bytecheck", "little_endian", "unaligned", "pointer_width_32"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[[bench]]
+name = "hnsw"
+harness = false
+
+[[bench]]
+name = "synthetic"
+harness = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = 1
+
+[profile.bench]
+inherits = "release"
+
+[profile.test]
+opt-level = 2

@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "ccr-*"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: aarch64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - name: clippy (aarch64 / NEON kernels)
+        run: cargo clippy --target aarch64-unknown-linux-gnu --lib -- -D warnings
+      - name: module size limit (<= 300 lines)
+        run: scripts/check_file_length.sh
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --all-targets
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: MCP black-box tests (Python)
+        run: |
+          cargo build
+          python3 -m unittest discover -s tests/python -v
+
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: property fuzzing (HNSW, graph, MCP)
+        env:
+          SYNAPSTORE_FUZZ_ITERS: "5000"
+        run: cargo test --release --test fuzz_hnsw --test fuzz_graph --test fuzz_mcp
+
+  synthetic:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: synthetic dataset — 100 % pass required
+        env:
+          SYNAPSTORE_SYNTH_RECORDS: "60000"
+        run: cargo test --release --test synthetic -- --nocapture
+      - name: 100k-record end-to-end
+        run: cargo test --release --test e2e_records -- --nocapture
+
+  perf-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    env:
+      SYNAPSTORE_BENCH_RECORDS: "30000"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: benchmark head
+        run: |
+          cargo bench --bench synthetic
+          cp bench/results/synthetic.json "$RUNNER_TEMP/head.json"
+      - name: benchmark base (same runner)
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "${{ github.event.pull_request.base.sha }}"
+          if [ -f "$RUNNER_TEMP/base/benches/synthetic.rs" ]; then
+            (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" cargo bench --bench synthetic)
+            cp "$RUNNER_TEMP/base/bench/results/synthetic.json" "$RUNNER_TEMP/base.json"
+          fi
+      - name: gate
+        run: |
+          if [ -f "$RUNNER_TEMP/base.json" ]; then
+            python3 scripts/perf_gate.py "$RUNNER_TEMP/head.json" "$RUNNER_TEMP/base.json"
+          else
+            python3 scripts/perf_gate.py "$RUNNER_TEMP/head.json"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-results
+          path: ${{ runner.temp }}/*.json
