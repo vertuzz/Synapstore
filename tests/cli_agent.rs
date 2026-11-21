@@ -70,8 +70,10 @@ fn memory_commands_use_the_default_store() {
     assert!(h.ok(&["events", "--limit", "5"]).contains("action   ran the tests"));
     let v: serde_json::Value = serde_json::from_str(&h.ok(&["recall", "coffee", "--json"])).unwrap();
     let id = v["hits"][0]["id"].as_str().unwrap().to_string();
-    assert_eq!(h.ok(&["forget", &id]).trim(), "forgot 1 memory");
-    assert_eq!(h.ok(&["facts", "--predicate", "prefers"]).trim(), "user -[prefers]-> dark roast coffee");
+    h.ok(&["fact", "add", "user", "drinks", "tea"]);
+    assert_eq!(h.ok(&["forget", &id]).trim(), "forgot 1 memory and 1 fact");
+    assert_eq!(h.ok(&["facts", "--predicate", "prefers"]).trim(), "no matching facts", "its facts go with it");
+    assert_eq!(h.ok(&["facts", "--subject", "user"]).trim(), "user -[drinks]-> tea", "unsourced facts stay");
     // An explicit store is separate from the default one.
     let other = h.path("other.redb");
     assert_eq!(h.ok(&["recall", "coffee", "--db", other.to_str().unwrap()]).trim(), "no matching memories");

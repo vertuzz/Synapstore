@@ -139,7 +139,7 @@ fn forget_tombstones_and_explain() {
         .unwrap();
     assert!(ex.verdict.starts_with("low_similarity"), "{}", ex.verdict);
 
-    assert_eq!(s.forget(vec![target, 12345]).unwrap(), 1);
+    assert_eq!(s.forget(vec![target, 12345]).unwrap().forgotten, 1);
     let hits = s.recall(&vq(vecs[7].clone(), 3)).unwrap().hits;
     assert!(hits.iter().all(|h| h.id != target));
     assert_eq!(hits.len(), 3, "tombstones still route but are never returned");

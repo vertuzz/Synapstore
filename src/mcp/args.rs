@@ -78,6 +78,15 @@ pub fn opt_str_list(a: &Value, key: &str) -> Result<Option<Vec<String>>> {
     }
 }
 
+/// Memory ids as 16-digit hex strings (a single string is accepted too).
+pub fn id_list(a: &Value, key: &str) -> Result<Vec<u64>> {
+    opt_str_list(a, key)?
+        .unwrap_or_default()
+        .iter()
+        .map(|s| hex_to_id(s).ok_or_else(|| bad(format!("bad id `{s}` in `{key}`"))))
+        .collect()
+}
+
 /// Facts as objects `{subject, predicate, object}` or triples `[s, p, o]`.
 pub fn facts(a: &Value, key: &str) -> Result<Vec<FactInput>> {
     let Some(v) = a.get(key).filter(|v| !v.is_null()) else {

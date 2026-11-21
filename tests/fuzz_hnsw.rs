@@ -51,7 +51,7 @@ fn random_operation_sequences_keep_index_invariants() {
             }
             6 if !live.is_empty() => {
                 let (t, _) = live.remove(rng.below(live.len()));
-                assert_eq!(s.forget(vec![synapstore::hash::chunk_id(&t)]).unwrap(), 1);
+                assert_eq!(s.forget(vec![synapstore::hash::chunk_id(&t)]).unwrap().forgotten, 1);
             }
             _ => {
                 let k = 1 + rng.below(8);

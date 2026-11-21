@@ -159,6 +159,27 @@ impl<'t> GraphWriter<'t> {
         Ok(true)
     }
 
+    /// Retract every fact whose provenance (`source_chunk`) is one of
+    /// `chunks`; returns how many were removed. Facts asserted without a
+    /// source are never touched. A full scan: forgetting is rare.
+    pub fn retract_sourced(&mut self, chunks: &[u64]) -> Result<usize> {
+        if chunks.is_empty() {
+            return Ok(0);
+        }
+        let mut doomed = Vec::new();
+        for row in self.triples.iter()? {
+            let (k, v) = row?;
+            let t: Triple = archive::decode(v.value())?;
+            if t.source_chunk != 0 && chunks.contains(&t.source_chunk) {
+                doomed.push(k.value());
+            }
+        }
+        for &(s, p, o) in &doomed {
+            self.retract(s, p, o)?;
+        }
+        Ok(doomed.len())
+    }
+
     /// Record that `entity` is mentioned by `chunk`.
     pub fn link_chunk(&mut self, entity: u64, chunk: u64) -> Result<()> {
         let next = match self.entity_chunks.get(entity)? {

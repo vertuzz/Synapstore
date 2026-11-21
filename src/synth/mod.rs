@@ -67,6 +67,7 @@ pub fn load(store: &SynapStore, spec: &Spec) -> Result<(world::World, LoadReport
                 source: Some("synthetic".into()),
                 kind: Some("memory".into()),
                 timestamp_ms: Some(m.ts),
+                supersedes: Vec::new(),
             })
             .collect();
         store.memorize_batch(&inputs)?;

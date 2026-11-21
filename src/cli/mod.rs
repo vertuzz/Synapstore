@@ -101,6 +101,7 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             "--scope" => f.scope = Some(value(&mut it, a)?.clone()),
             "--expires-days" => f.expires_days = Some(num::<u64>(&mut it, a)?.max(1)),
             "--fact" => g.facts.push(value(&mut it, a)?.clone()),
+            "--supersedes" | "--replaces" => g.supersedes.push(value(&mut it, a)?.clone()),
             "--tag" => g.tags.push(value(&mut it, a)?.clone()),
             "--source" => g.source = Some(value(&mut it, a)?.clone()),
             "--kind" => g.kind = Some(value(&mut it, a)?.clone()),

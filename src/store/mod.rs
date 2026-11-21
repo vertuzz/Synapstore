@@ -181,14 +181,13 @@ impl SynapStore {
     }
 
     /// Layer 1+2+3 write: chunk, embed (if needed), index, link entities,
-    /// assert facts and append an episode.
+    /// assert facts and append an episode. `supersedes` memories are
+    /// forgotten (with their facts) first, in the same transaction.
     pub fn memorize(&self, input: MemorizeInput) -> Result<MemorizeOutcome> {
         self.timed(Op::Memorize, || {
             let op = self.prepare(&input)?;
-            match self.write(op)? {
-                WriteResult::Memorize(o) => Ok(o),
-                other => Err(Error::Storage(format!("unexpected writer result {other:?}"))),
-            }
+            let mut out = self.write_memorize(std::slice::from_ref(&input), vec![op])?;
+            out.pop().ok_or_else(|| Error::Storage("writer returned no memorize result".into()))
         })
     }
 
@@ -198,14 +197,36 @@ impl SynapStore {
             // Embedding is the expensive part: spread inputs over the cores.
             let ops =
                 crate::embed::parallel_map(inputs, |i| self.prepare(i)).into_iter().collect::<Result<Vec<_>>>()?;
-            match self.write(WriteOp::Batch(ops))? {
-                WriteResult::Batch(rs) => Ok(rs
-                    .into_iter()
-                    .filter_map(|r| if let WriteResult::Memorize(o) = r { Some(o) } else { None })
-                    .collect()),
-                other => Err(Error::Storage(format!("unexpected writer result {other:?}"))),
-            }
+            self.write_memorize(inputs, ops)
         })
+    }
+
+    /// Commit prepared memorize ops atomically, each preceded by the forget
+    /// of the memories it supersedes.
+    fn write_memorize(&self, inputs: &[MemorizeInput], prepared: Vec<WriteOp>) -> Result<Vec<MemorizeOutcome>> {
+        let mut ops = Vec::with_capacity(prepared.len());
+        for (input, op) in inputs.iter().zip(prepared) {
+            if !input.supersedes.is_empty() {
+                ops.push(WriteOp::Forget(input.supersedes.clone()));
+            }
+            ops.push(op);
+        }
+        let rs = match self.write(WriteOp::Batch(ops))? {
+            WriteResult::Batch(rs) => rs,
+            other => return Err(Error::Storage(format!("unexpected writer result {other:?}"))),
+        };
+        let (mut out, mut pending) = (Vec::with_capacity(inputs.len()), ForgetOutcome::default());
+        for r in rs {
+            match r {
+                WriteResult::Forget(f) => pending = f,
+                WriteResult::Memorize(o) => {
+                    let f = std::mem::take(&mut pending);
+                    out.push(MemorizeOutcome { superseded: f.forgotten, facts_retracted: f.facts_retracted, ..o });
+                }
+                other => return Err(Error::Storage(format!("unexpected writer result {other:?}"))),
+            }
+        }
+        Ok(out)
     }
 
     /// Assert facts directly. `source` optionally links them to a chunk.
@@ -260,8 +281,8 @@ impl SynapStore {
         }
     }
 
-    /// Delete chunks by id. Returns how many existed.
-    pub fn forget(&self, ids: Vec<u64>) -> Result<usize> {
+    /// Delete chunks by id, retracting the facts they asserted.
+    pub fn forget(&self, ids: Vec<u64>) -> Result<ForgetOutcome> {
         self.timed(Op::Forget, || match self.write(WriteOp::Forget(ids))? {
             WriteResult::Forget(n) => Ok(n),
             other => Err(Error::Storage(format!("unexpected writer result {other:?}"))),
