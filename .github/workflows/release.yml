@@ -61,7 +61,11 @@ jobs:
           mkdir "$dir"
           cp target/${{ matrix.target }}/release/synapstore README.md LICENSE "$dir"/
           tar -czf "$dir.tar.gz" "$dir"
-          shasum -a 256 "$dir.tar.gz" > "$dir.tar.gz.sha256"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
+          else
+            shasum -a 256 "$dir.tar.gz" > "$dir.tar.gz.sha256"
+          fi
           gh release upload "$TAG" "$dir.tar.gz" "$dir.tar.gz.sha256" --clobber
       - name: Package (windows)
         if: runner.os == 'Windows'

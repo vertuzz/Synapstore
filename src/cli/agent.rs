@@ -191,11 +191,13 @@ fn remote_call(url: &str, token: Option<String>, tool: &str, args: &Value) -> Re
     if let Some(e) = v.get("error") {
         return Err(e["message"].as_str().unwrap_or("error").to_string());
     }
-    let r = &v["result"];
+    let r = v.get("result").ok_or_else(|| format!("{url}: unexpected response (missing `result`)"))?;
     if r["isError"] == true {
         return Err(r["content"][0]["text"].as_str().unwrap_or("tool error").to_string());
     }
-    Ok(r["structuredContent"].clone())
+    r.get("structuredContent")
+        .cloned()
+        .ok_or_else(|| format!("{url}: unexpected response (missing `structuredContent`)"))
 }
 
 /// Run the tool call; `open` opens the local store when no URL is set.

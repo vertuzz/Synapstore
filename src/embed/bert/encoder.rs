@@ -131,7 +131,7 @@ impl Encoder {
         let prefix = if st.shape("bert.embeddings.word_embeddings.weight").is_some() { "bert." } else { "" };
         let mut l = Loader { st, prefix: prefix.into() };
         let h = cfg.hidden;
-        if cfg.heads == 0 || h % cfg.heads != 0 {
+        if cfg.heads == 0 || !h.is_multiple_of(cfg.heads) {
             return Err(Error::InvalidInput(format!("hidden size {h} not divisible by {} heads", cfg.heads)));
         }
         let mut layers = Vec::with_capacity(cfg.layers);

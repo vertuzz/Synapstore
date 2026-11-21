@@ -115,7 +115,7 @@ macro_rules! dispatch {
 /// `a` is `[m][w.k]`, `bias` is `[w.n]`; returns `[m][w.n]`.
 pub fn linear(a: &[f32], w: &Packed, bias: &[f32]) -> Vec<f32> {
     let (k, n) = (w.k, w.n);
-    assert!(k > 0 && a.len() % k == 0 && bias.len() == n, "gemm shape mismatch");
+    assert!(k > 0 && a.len().is_multiple_of(k) && bias.len() == n, "gemm shape mismatch");
     let m = a.len() / k;
     let mut c = vec![0f32; m * n];
     #[cfg(target_arch = "x86_64")]

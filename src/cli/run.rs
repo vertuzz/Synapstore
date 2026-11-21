@@ -139,11 +139,13 @@ pub fn run(c: Cli) -> Result<(), String> {
         Command::Agent(op) => {
             let mut op = op.clone();
             let mut token = None;
-            if op.url.is_none() && !c.db_explicit && std::env::var_os("SYNAPSTORE_URL").is_none() {
-                if let Some((url, saved)) = crate::install::load_remote() {
-                    op.url = Some(url);
-                    token = saved;
-                }
+            if op.url.is_none()
+                && !c.db_explicit
+                && std::env::var_os("SYNAPSTORE_URL").is_none()
+                && let Some((url, saved)) = crate::install::load_remote()
+            {
+                op.url = Some(url);
+                token = saved;
             }
             super::agent::execute(op, token, || open(&c))?
         }
