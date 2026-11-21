@@ -3,6 +3,7 @@
 //! neighbor ids per layer, and `get_node()` is a lookup in the current redb
 //! transaction. Vectors are unit-normalized, so cosine similarity = dot.
 
+pub mod cache;
 pub mod insert;
 pub mod inspect;
 pub mod repair;
@@ -11,7 +12,7 @@ pub mod view;
 
 pub use insert::{InsertOutcome, insert};
 pub use search::{knn, search_layer};
-pub use view::{EntryPoint, View};
+pub use view::{EntryPoint, Graph, View};
 
 use crate::hash::mix64;
 use std::cmp::Ordering;

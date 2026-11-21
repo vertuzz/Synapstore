@@ -114,6 +114,7 @@ pub fn maybe_repair(
     meta: &mut Table<'_, &'static str, u64>,
     p: &HnswParams,
     inserted: u64,
+    cache: Option<&super::cache::WriteCache>,
 ) -> Result<Option<RepairOutcome>> {
     if inserted == 0 {
         return Ok(None);
@@ -126,5 +127,10 @@ pub fn maybe_repair(
     }
     meta.insert(keys::HNSW_SINCE_REPAIR, 0)?;
     let ep = EntryPoint::load(&*meta)?;
+    // Repair reads and writes the tables directly.
+    if let Some(c) = cache {
+        c.flush(nodes)?;
+        c.clear();
+    }
     repair(vectors, nodes, ep, p).map(Some)
 }

@@ -111,7 +111,8 @@ fn transact(ctx: &WriterCtx, ops: &[WriteOp]) -> Result<Vec<WriteResult>> {
         }
     };
     Metrics::add(&counters.write_retries, u64::from(retries));
-    let actx = ApplyCtx { hnsw: &ctx.hnsw, metrics: &ctx.metrics };
+    let cache = crate::hnsw::cache::WriteCache::default();
+    let actx = ApplyCtx { hnsw: &ctx.hnsw, metrics: &ctx.metrics, cache: &cache };
     let mut results = Vec::with_capacity(ops.len());
     for op in ops {
         match apply(&txn, op, &actx) {
@@ -125,6 +126,11 @@ fn transact(ctx: &WriterCtx, ops: &[WriteOp]) -> Result<Vec<WriteResult>> {
                 return Err(e);
             }
         }
+    }
+    if let Err(e) = txn.open_table(crate::tables::HNSW_NODES).map_err(Into::into).and_then(|mut t| cache.flush(&mut t))
+    {
+        let _ = txn.abort();
+        return Err(e);
     }
     txn.commit()?;
     let elapsed = started.elapsed();

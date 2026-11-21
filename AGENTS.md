@@ -10,8 +10,12 @@
 - Never weaken an assertion to make a test pass. The decay probes, graph-vs-reference BFS, HNSW reachability
   and zero-copy allocation checks are product invariants.
 - Map of the code:
-  - `src/store/` — public API (`SynapStore`), write ops (`apply.rs`) and the writer thread (`writer.rs`).
-  - `src/hnsw/` — index search, insert, repair, inspection over redb tables.
+  - `src/store/` — public API (`SynapStore`), write ops (`apply.rs`), the writer thread (`writer.rs`),
+    embedder selection (`space.rs`) and API tokens (`tokens.rs`).
+  - `src/hnsw/` — index search, insert (with the per-transaction write-back cache), repair, inspection.
+  - `src/embed/` — the `Embedder` trait; `lexical`, `bert/` (pure-Rust BERT and its tokenizers), `fetch.rs`
+    (model registry and download), `remote.rs` (OpenAI-compatible endpoints).
+  - `src/http/` + `src/auth/` — Streamable HTTP transport and bearer-token authentication.
   - `src/graph/` — triple store writer and BFS reader.
   - `src/mcp/` — JSON-RPC framing, tool schemas (`tools.rs`), handlers.
   - `src/synth/` — deterministic synthetic world + correctness checks used by tests and benches.
@@ -25,5 +29,8 @@
 - `recall` before acting on a task you may have seen before; pass `max_age` to only consider recent context.
 - `graph_query` to expand from an entity to related facts (depth 2 by default).
 - When a memory you expect is missing, call `explain` with its id and your query instead of guessing.
-- Pass `vector` from your embedding model if you have one; otherwise the built-in lexical embedder is used.
-  Do not mix the two in one store.
+- Pass `vector` from your embedding model if you have one. Otherwise the store's embedder is used: `lexical`
+  by default, or a neural model chosen with `--embedder` when the store was created. Do not mix your own
+  vectors and text queries in one store.
+- Over HTTP, your token's scope decides which tools you see. A `forbidden` error means you need a token with a
+  wider scope; do not retry it.

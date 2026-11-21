@@ -1,0 +1,11 @@
+# TLS termination for `synapstore serve`. Caddy obtains and renews a
+# Let's Encrypt certificate for the domain automatically.
+#
+#   synapstore serve /var/lib/synapstore/memory.redb --listen 127.0.0.1:8765 --trust-proxy
+#   caddy run --config /etc/caddy/Caddyfile
+memory.example.com {
+	encode zstd gzip
+	reverse_proxy /mcp* 127.0.0.1:8765
+	reverse_proxy /healthz 127.0.0.1:8765
+	respond 404
+}

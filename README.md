@@ -1,7 +1,8 @@
 # SynapStore
 
 Single-file, ACID memory store for AI agents. It is written in pure Rust and served over the
-[Model Context Protocol](https://modelcontextprotocol.io) on stdio.
+[Model Context Protocol](https://modelcontextprotocol.io), either locally on stdio or remotely over HTTP with
+token authentication.
 
 One `.redb` file holds three memory layers:
 
@@ -11,9 +12,12 @@ One `.redb` file holds three memory layers:
 | **Knowledge graph** | Subject–Predicate–Object facts with provenance | SPO / POS / OPS indices, BFS up to depth 2 (configurable to 6) |
 | **Episodic** | Append-only log of thoughts, actions, tool results | Time-ordered scans; drives time-decay re-ranking of recall |
 
-Dependency budget: `redb`, `rkyv`, `serde`/`serde_json` (used only for MCP I/O) and `thiserror`. Everything
-else is implemented in this crate and has no C bindings: the HNSW index, the SIMD kernels, XXH64, the
-JSON-RPC layer, the logger, the metrics and the CLI parsing.
+Dependency budget: `redb`, `rkyv`, `serde`/`serde_json` (MCP I/O and model metadata) and `thiserror`.
+Everything else is implemented in this crate and has no C bindings:
+
+- the HNSW index and the SIMD kernels
+- the BERT inference engine and its tokenizers
+- SHA-256, the HTTP server, the JSON-RPC layer, the logger, the metrics and the CLI parsing
 
 ## Install
 
@@ -23,32 +27,127 @@ cargo install --git https://github.com/vertuzz/Synapstore
 cargo install --path .
 ```
 
-## Use with an MCP client
+## Quick start
 
 ```sh
-synapstore --mcp ~/.agent/memory.redb
+# Local agent (Claude Code, Cursor, …) over stdio, with a neural embedder:
+claude mcp add synapstore -- synapstore --mcp ~/.agent/memory.redb --embedder minilm
+
+# Or expose one memory to several machines over HTTP:
+synapstore serve ~/.agent/memory.redb --listen 127.0.0.1:8765 --embedder multilingual
 ```
 
-Claude Code:
+## Embeddings
+
+Text needs a vector before it can be indexed. Pick an embedder with `--embedder` when you create a store. The
+choice is recorded in the file, so later opens use it automatically. A store never mixes vector spaces: opening
+it with a different embedder is refused.
+
+| `--embedder` | What it is | Download | Quality |
+|---|---|---|---|
+| `lexical` (default) | Feature hashing of words, stems and character trigrams | none | word overlap only |
+| `minilm` | [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2), English, 384 dims | 91 MB | good, fast |
+| `bge-small` | [bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5), English, 384 dims | 134 MB | better English retrieval |
+| `multilingual` | [multilingual-e5-small](https://huggingface.co/intfloat/multilingual-e5-small), ~100 languages, 384 dims | 471 MB | cross-lingual |
+| `hf:<owner>/<repo>[@rev]` | Any BERT-architecture model on the Hub with `model.safetensors` | varies | |
+| `<directory>` | A local model directory (`config.json`, `model.safetensors`, `tokenizer.json` or `vocab.txt`) | none | |
+| `openai:<model>[@<base-url>]` | Any OpenAI-compatible `/v1/embeddings` endpoint | none | that model's |
+
+**Built-in models** run on the CPU inside the `synapstore` process, in pure Rust:
+
+- **Tokenizers:** WordPiece and SentencePiece/Unigram, matching Hugging Face `tokenizers` token for token.
+- **Inference:** a BERT encoder with a packed AVX2/FMA GEMM kernel.
+- **Validation:** `tests/embed_model.rs` compares the output against onnxruntime and HF tokenizers.
+
+The weights download once on first use with the system `curl`, or ahead of time with `synapstore pull <model>`.
+
+- **Integrity:** files are checked against the SHA-256 the Hub publishes (`X-Linked-Etag`).
+- **Cache:** downloads go to `~/.cache/synapstore/models`; set `SYNAPSTORE_MODELS` to change it.
+- **Hub environment variables:** `HF_ENDPOINT` selects a mirror, `HF_TOKEN` gives access to gated repos, and
+  `HF_HUB_OFFLINE=1` forbids downloads.
+
+`synapstore models` lists the models and shows which ones are cached.
+
+Speed on 4 vCPUs (AVX2) with `minilm`:
+
+- **A short query:** about 10 ms.
+- **Bulk memorize:** about 215 chunks/s.
+
+`bge-small` and `multilingual` have 12 layers instead of 6, so they run at about half that speed.
+
+**Remote endpoints.** With `openai:nomic-embed-text@http://localhost:11434/v1`, SynapStore uses Ollama's
+embeddings API. llama.cpp, vLLM, LM Studio, TEI and OpenAI itself work the same way:
+`openai:text-embedding-3-small` uses `https://api.openai.com/v1`. The API key is read from
+`SYNAPSTORE_EMBED_API_KEY`, or from `OPENAI_API_KEY`.
+
+**Your own vectors.** Agents can always pass `vector` to `memorize` and `recall`. Such a store is pinned to the
+`external` space.
+
+## Remote access over HTTP
 
 ```sh
-claude mcp add synapstore -- synapstore --mcp ~/.agent/memory.redb
+synapstore serve memory.redb --listen 0.0.0.0:8765
 ```
 
-Generic `mcpServers` config (Cursor, Claude Desktop, …):
+`serve --listen` speaks MCP's **Streamable HTTP** transport (protocol revisions 2025-03-26 to 2025-11-25) at
+`/mcp`. `/healthz` is an unauthenticated liveness probe.
+
+**Authentication** uses bearer tokens (RFC 6750). On the first start without tokens, SynapStore creates one and
+prints it once on stderr. Manage tokens from another terminal while the server runs:
+
+```sh
+synapstore token create memory.redb --name laptop                       # scope write (default)
+synapstore token create memory.redb --name dashboard --scope read --expires-days 30
+synapstore token list memory.redb
+synapstore token revoke memory.redb dashboard                            # by name or id, effective immediately
+```
+
+| Scope | Tools |
+|---|---|
+| `read` | `recall`, `graph_query`, `graph_match`, `recent_events`, `explain`, `stats` |
+| `write` | read + `memorize`, `add_facts`, `retract_fact`, `log_event`, `forget` |
+| `admin` | write + `repair_index` |
+
+Each token only sees the tools its scope allows in `tools/list`. Calling any other tool returns a `forbidden`
+tool error.
+
+Connect a client:
+
+```sh
+claude mcp add --transport http synapstore https://memory.example.com/mcp \
+  --header "Authorization: Bearer syn_…"
+```
 
 ```json
-{
-  "mcpServers": {
-    "synapstore": { "command": "synapstore", "args": ["--mcp", "/home/me/.agent/memory.redb"] }
-  }
-}
+{ "mcpServers": { "synapstore": {
+    "type": "http", "url": "https://memory.example.com/mcp",
+    "headers": { "Authorization": "Bearer syn_…" } } } }
 ```
 
-Logs go to `<db>.log` (logfmt, rotated at 10 MiB, 5 files kept) so stdout carries only protocol traffic.
-Supported protocol versions: `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`.
+### Security model
 
-### Tools
+- **Tokens:** 256 bits from the OS CSPRNG, prefixed `syn_` so secret scanners recognize them.
+- **Storage:** only the SHA-256 of each token is stored. A copied `.redb` file contains no usable credential.
+- **Checks on every request:** each request is checked against the file. Revocation and expiry take effect
+  immediately, with no restart.
+- **Sessions:** an MCP session (`Mcp-Session-Id`) is bound to the token that created it. Another token cannot
+  use it, and idle sessions expire after an hour.
+- **Brute-force throttling:** an address that fails authentication 20 times within 5 minutes gets `429` until
+  the window ends. Behind a proxy, pass `--trust-proxy` so the client address is taken from `X-Forwarded-For`.
+- **Browsers:** requests carrying an `Origin` header are rejected unless that origin is in the
+  `--allow-origin` list, which defends against DNS rebinding. CORS preflight is answered for allowed origins.
+- **Limits:**
+  - request bodies: 8 MiB, configurable with `--max-body-mb`
+  - headers: at most 100, 32 KiB in total
+  - connections: 30 s idle timeout
+  - workers: a bounded pool, with `503` when it is saturated
+- **No-auth mode:** `--no-auth` is refused unless the server binds to a loopback address.
+- **TLS** is not built in, because it would break the dependency budget. On a public address, put a TLS reverse
+  proxy in front of the server. [`deploy/Caddyfile`](deploy/Caddyfile) does it in four lines with automatic
+  Let's Encrypt certificates, and [`deploy/synapstore.service`](deploy/synapstore.service) is a hardened
+  systemd unit for it.
+
+## MCP tools
 
 | Tool | Purpose |
 |---|---|
@@ -61,75 +160,75 @@ Supported protocol versions: `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-
 | `forget(ids? \| text?)` | Delete memories |
 | `explain(target_id \| target_text, query \| vector)` | Whitebox trace: exact rank, HNSW reachability, decay, filters → verdict |
 | `repair_index` | Reconnect unreachable HNSW nodes (also runs automatically) |
-| `stats(detailed?)` | Counts, index structure, latency histograms, counters |
+| `stats(detailed?)` | Counts, index structure, embedder, latency histograms, counters |
 
-When a tool fails it returns `isError: true` with `structuredContent.error = {kind, message}`; the server
-keeps running. If `vector` is omitted, SynapStore uses its built-in **lexical** embedder: feature hashing of
-words, stems, bigrams and character trigrams. This needs no model, but it measures word overlap, not
-meaning. For semantic recall, pass vectors from a real embedding model. A store is pinned to one embedding
-space (source and dimension) by its first write, and mixing spaces is rejected with `embedding_mismatch`.
+When a tool fails, it returns `isError: true` with `structuredContent.error = {kind, message}`, and the server
+keeps running. The stdio server logs to `<db>.log` (logfmt, rotated at 10 MiB, 5 files kept), so stdout carries
+only protocol traffic.
 
-### CLI
+## CLI
 
 ```
-synapstore --mcp <DB>                 Serve MCP over stdio
-synapstore stats <DB> [--detailed]    Statistics as JSON
-synapstore dump <DB> [--vectors]      Export every table as JSON lines (whitebox export)
-synapstore repair <DB>                Reconnect unreachable HNSW nodes
-synapstore synth <DB> [--records N]   Load a synthetic agent-memory dataset
+synapstore --mcp <DB>                   Serve MCP over stdio
+synapstore serve <DB> --listen <ADDR>   Serve MCP over HTTP with token auth
+synapstore token create|list|revoke     Manage API tokens
+synapstore models | pull <MODEL>        List / download embedding models
+synapstore stats <DB> [--detailed]      Statistics as JSON
+synapstore dump <DB> [--vectors]        Export every table as JSON lines (whitebox export)
+synapstore repair <DB>                  Reconnect unreachable HNSW nodes
+synapstore synth <DB> [--records N]     Load a synthetic agent-memory dataset
 ```
 
-Run `synapstore --help` for the tuning flags: `--ef-search`, `--m`, `--ef-construction`,
-`--half-life-days`, `--no-decay`, `--cache-mb` and the logging options.
+Run `synapstore --help` for all flags. They include `--embedder`, `--allow-origin`, `--trust-proxy`,
+`--ef-search`, `--m`, `--half-life-days`, `--no-decay`, `--cache-mb` and the logging options.
 
 ## Design
 
-- **Deterministic ids and upserts.** A chunk's id is `XXH64(normalize(text))` (case- and
-  whitespace-insensitive). Entities and predicates get ids from their own namespaces. Memorizing the same
-  content again updates the stored record and does not create a duplicate. Ids are 16-character hex
-  strings on the wire.
-- **Single writer.** Every mutation goes through an mpsc channel to one writer thread. That thread
-  group-commits up to 64 queued operations in one redb transaction, falling back to one transaction per
-  operation if any of them fails. Multiple *processes* can share a file: `try_begin_write` contention is
-  retried with exponential backoff (5 retries, 20 ms base, 2 s cap) before `busy` is returned.
+- **Deterministic ids and upserts.** A chunk's id is `XXH64(normalize(text))`, which ignores case and
+  whitespace. Memorizing the same content again updates the stored record and does not create a duplicate.
+- **Single writer.** Every mutation goes through an mpsc channel to one writer thread.
+  - That thread group-commits up to 64 queued operations in one redb transaction. If any of them fails, it falls
+    back to one transaction per operation.
+  - Within a transaction, HNSW vectors and nodes are served from a write-back cache, and each modified node is
+    written once at commit.
+  - Several *processes* can share a file: `try_begin_write` contention is retried with exponential backoff
+    (5 retries, 20 ms base, 2 s cap).
+- **Embedding off the writer.** Texts are chunked and embedded on the caller's thread, so slow models never block
+  the single writer. `memorize_batch` spreads that work over all cores.
 - **Zero-copy reads.** Records are rkyv archives that are validated and read in place, inside redb's page
-  buffers. Vectors are stored as raw little-endian `f32`, and the SIMD kernels read them unaligned
-  directly from those buffers. `tests/zero_copy.rs` asserts **0 heap bytes per read** with a counting
-  allocator. redb uses its own page cache rather than `mmap`, so "zero-copy" means no copy beyond redb's
-  cache.
-- **HNSW in redb.** Each node is one record (`HnswNode { level, layers: [[Link{id, sim}]] }`) with
-  M = 16, M0 = 32, ef_construction = 100 and ef_search = 64. A node's level is derived from its id, so
-  rebuilds are reproducible.
-  - Neighbors are chosen with the diversity heuristic, which keeps pruned candidates.
-  - Forgotten nodes stay in the graph as tombstones, so the graph stays navigable.
-  - A Lucene-style connectivity repair runs automatically, amortized (every max(1000, n/8) inserts).
-  - Recall widens `ef` automatically when filters (`max_age`, `tags`) discard candidates.
-- **Time-decay.** `freshness = 0.5^(age / half_life)` and
-  `score = sim × (floor + (1 − floor)·freshness + boost·freshness)`, with defaults half-life 30 d,
-  floor 0.5 and boost 0.1. Near-exact matches (cosine ≥ 0.92 → 0.99, smoothstep) are protected from the
-  age penalty, so an old fact that matches exactly still beats a fresh fact that is only loosely related.
-- **Graph.** `SPO (s,p)→[o]`, `POS (p,o)→[s]` and `OPS (o,p)→[s]` (for in-edges). Values are packed,
-  sorted `u64` lists. `TRIPLES` holds provenance, and `ENTITY_CHUNKS` links entities to memories.
+  buffers. The SIMD kernels read vectors unaligned, directly from those buffers. `tests/zero_copy.rs` asserts
+  **0 heap bytes per read**. redb uses its own page cache rather than `mmap`, so "zero-copy" means no copy
+  beyond redb's cache.
+- **HNSW in redb.** Parameters: M = 16, M0 = 32, ef_construction = 100, ef_search = 64.
+  - Neighbors are chosen with the diversity heuristic.
+  - Forgotten nodes stay in the graph as tombstones, so it stays navigable.
+  - A Lucene-style connectivity repair runs automatically, amortized over inserts.
+  - Recall widens `ef` automatically when filters discard candidates.
+- **Time-decay.** `score = sim × (floor + (1 − floor)·freshness + boost·freshness)`, where
+  `freshness = 0.5^(age / half_life)`. Defaults: half-life 30 d, floor 0.5, boost 0.1. Near-exact matches are
+  protected from the age penalty.
+- **Graph.** `SPO (s,p)→[o]`, `POS (p,o)→[s]` and `OPS (o,p)→[s]`, with packed sorted id lists. `TRIPLES` holds
+  provenance, and `ENTITY_CHUNKS` links entities to memories.
 
-Source layout: `src/{math,hnsw,graph,store,mcp,synth}`. Every module is under 300 lines (CI enforces it).
+Source layout: `src/{math,hnsw,graph,store,embed,http,auth,mcp,synth}`. Every module is under 300 lines (CI
+enforces it).
 
 ## Benchmarks
 
-The numbers below were measured on a 4-vCPU cloud VM with an AVX2 release build.
-Reproduce them with `cargo bench --bench hnsw` and `cargo bench --bench synthetic`. Results are written to
-`bench/results/*.json`.
+Measured on a 4-vCPU cloud VM with an AVX2 release build (`cargo bench --bench hnsw`,
+`cargo bench --bench synthetic`). Results are written to `bench/results/*.json`.
 
-**HNSW benchmark: 10,000 vectors × 384 dims**
+**HNSW: 10,000 vectors × 384 dims**
 
 | Metric | Value |
 |---|---|
 | recall@10 (vs. brute force) | 1.00 |
 | query p50 / p95 | 443 µs / 605 µs |
-| build | 558 inserts/s (fully durable, one commit per batch) |
+| build | 558 inserts/s, fully durable (1,898/s at 5k with the write-back cache) |
 | peak RSS | 80 MiB |
 | SIMD speedup over scalar | 7.5× (384), 7.8× (768), 8.2× (1536) |
 
-**Synthetic agent workload: 200k requested → 329k stored records (dim 128)**
+**Synthetic agent workload: 329k stored records (dim 128)**
 
 The workload has 66.7k memories, 49.5k facts and 200k episodes.
 
@@ -143,23 +242,19 @@ The workload has 66.7k memories, 49.5k facts and 200k episodes.
 | zero-copy reads | 0 B allocated per read |
 | unreachable HNSW nodes | 0 |
 | file / peak RSS | 272 MiB / 341 MiB |
-| load | 310 memories/s, 50k events/s |
-
-Writes are bounded by HNSW insertion. Each insert does a full beam search plus backlink pruning inside a
-durable transaction. Use `memorize_batch` (library API) for bulk loads.
 
 ## Testing
 
 ```sh
-cargo test --all-targets                         # unit, integration, 100k-record E2E, concurrency
+cargo test --all-targets                         # unit, integration, HTTP/auth, 100k-record E2E, concurrency
 SYNAPSTORE_FUZZ_ITERS=20000 cargo test --release --test fuzz_hnsw --test fuzz_graph --test fuzz_mcp
 SYNAPSTORE_SYNTH_RECORDS=60000 cargo test --release --test synthetic
-cargo build && python3 -m unittest discover -s tests/python -v   # black-box MCP over stdio
-cargo bench --bench synthetic && python3 scripts/perf_gate.py bench/results/synthetic.json
+cargo build && python3 -m unittest discover -s tests/python -v   # black-box MCP over stdio and HTTP
+synapstore pull minilm && SYNAPSTORE_TEST_MODEL_DOWNLOAD=1 cargo test --release --test embed_model
 ```
 
-On pull requests, CI runs the synthetic benchmark on the base commit and the head commit on the same
-runner. `scripts/perf_gate.py` fails the PR if any of these regress:
+On pull requests, CI runs the synthetic benchmark on the base commit and the head commit on the same runner.
+`scripts/perf_gate.py` fails the PR if any of these regress:
 
 - latency by more than 25 %
 - peak RSS by more than 10 %
@@ -176,4 +271,5 @@ It also fails if any absolute invariant breaks:
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE). The downloadable models keep their own licenses: Apache-2.0 for MiniLM and
+MIT for BGE and E5.

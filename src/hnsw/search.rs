@@ -1,9 +1,9 @@
 //! Layer search (beam search with a dynamic candidate list) and k-NN.
 
-use super::{EntryPoint, Scored, View};
+use super::view::Graph;
+use super::{EntryPoint, Scored};
 use crate::error::Result;
 use crate::hash::IdSet;
-use redb::ReadableTable;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
@@ -11,19 +11,15 @@ use std::collections::BinaryHeap;
 /// results sorted by decreasing similarity. `exclude` may be traversed but
 /// is never returned (used when re-linking an existing node). `visited`
 /// accumulates the number of distance evaluations.
-pub fn search_layer<V, N>(
-    view: &View<'_, V, N>,
+pub fn search_layer<G: Graph>(
+    view: &G,
     q: &[f32],
     entry: &[Scored],
     ef: usize,
     level: usize,
     exclude: Option<u64>,
     visited: &mut u64,
-) -> Result<Vec<Scored>>
-where
-    V: ReadableTable<u64, &'static [u8]>,
-    N: ReadableTable<u64, &'static [u8]>,
-{
+) -> Result<Vec<Scored>> {
     let ef = ef.max(1);
     let mut seen = IdSet::with_capacity_and_hasher(ef * 8, Default::default());
     let mut cand: BinaryHeap<Scored> = BinaryHeap::with_capacity(ef * 2);
@@ -69,18 +65,14 @@ where
 }
 
 /// Greedy descent from the top layer down to (but excluding) `stop_level`.
-pub fn descend<V, N>(
-    view: &View<'_, V, N>,
+pub fn descend<G: Graph>(
+    view: &G,
     q: &[f32],
     ep: EntryPoint,
     stop_level: usize,
     exclude: Option<u64>,
     visited: &mut u64,
-) -> Result<Vec<Scored>>
-where
-    V: ReadableTable<u64, &'static [u8]>,
-    N: ReadableTable<u64, &'static [u8]>,
-{
+) -> Result<Vec<Scored>> {
     let mut eps = vec![Scored { sim: view.sim(q, ep.id)?, id: ep.id }];
     *visited += 1;
     let mut level = usize::from(ep.max_level);
@@ -96,18 +88,14 @@ where
 
 /// Approximate nearest neighbors of unit vector `q`: returns up to
 /// `max(ef, k)` candidates sorted by decreasing similarity.
-pub fn knn<V, N>(
-    view: &View<'_, V, N>,
+pub fn knn<G: Graph>(
+    view: &G,
     ep: EntryPoint,
     q: &[f32],
     k: usize,
     ef: usize,
     visited: &mut u64,
-) -> Result<Vec<Scored>>
-where
-    V: ReadableTable<u64, &'static [u8]>,
-    N: ReadableTable<u64, &'static [u8]>,
-{
+) -> Result<Vec<Scored>> {
     let eps = descend(view, q, ep, 0, None, visited)?;
     search_layer(view, q, &eps, ef.max(k), 0, None, visited)
 }

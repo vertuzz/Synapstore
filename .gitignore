@@ -3,3 +3,4 @@ target/
 *.redb.log*
 bench/results/
 __pycache__/
+.models/

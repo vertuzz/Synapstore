@@ -1,0 +1,25 @@
+# systemd unit for a public SynapStore behind a TLS proxy (see Caddyfile).
+#   sudo useradd --system --home /var/lib/synapstore synapstore
+#   sudo install -m 0755 ~/.cargo/bin/synapstore /usr/local/bin/
+#   sudo cp synapstore.service /etc/systemd/system/ && sudo systemctl enable --now synapstore
+#   sudo -u synapstore synapstore token create /var/lib/synapstore/memory.redb --name laptop
+[Unit]
+Description=SynapStore MCP memory server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=synapstore
+Group=synapstore
+Environment=SYNAPSTORE_MODELS=/var/lib/synapstore/models
+ExecStart=/usr/local/bin/synapstore serve /var/lib/synapstore/memory.redb --listen 127.0.0.1:8765 --trust-proxy --embedder multilingual
+Restart=on-failure
+StateDirectory=synapstore
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/synapstore
+
+[Install]
+WantedBy=multi-user.target

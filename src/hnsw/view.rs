@@ -25,6 +25,37 @@ impl EntryPoint {
     }
 }
 
+/// What graph search needs: similarities and adjacency.
+pub trait Graph {
+    /// Similarity between query `q` and stored vector `id`.
+    fn sim(&self, q: &[f32], id: u64) -> Result<f32>;
+    /// Similarity between two stored vectors.
+    fn sim_ids(&self, a: u64, b: u64) -> Result<f32>;
+    /// Neighbor ids of `id` at `level`, written into `out`.
+    fn neighbors(&self, id: u64, level: usize, out: &mut Vec<u64>) -> Result<()>;
+    /// Decoded copy of stored vector `id`.
+    fn owned_vector(&self, id: u64) -> Result<std::rc::Rc<[f32]>>;
+}
+
+impl<V, N> Graph for View<'_, V, N>
+where
+    V: ReadableTable<u64, &'static [u8]>,
+    N: ReadableTable<u64, &'static [u8]>,
+{
+    fn sim(&self, q: &[f32], id: u64) -> Result<f32> {
+        View::sim(self, q, id)
+    }
+    fn sim_ids(&self, a: u64, b: u64) -> Result<f32> {
+        View::sim_ids(self, a, b)
+    }
+    fn neighbors(&self, id: u64, level: usize, out: &mut Vec<u64>) -> Result<()> {
+        View::neighbors(self, id, level, out)
+    }
+    fn owned_vector(&self, id: u64) -> Result<std::rc::Rc<[f32]>> {
+        Ok(archive::le_to_f32s(self.vector(id)?.value()).into())
+    }
+}
+
 /// Borrowed view over the `vectors` and `hnsw_nodes` tables.
 pub struct View<'a, V, N> {
     pub vectors: &'a V,

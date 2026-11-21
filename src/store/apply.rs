@@ -7,6 +7,7 @@ use crate::archive::{decode, encode};
 use crate::error::{Error, Result};
 use crate::graph::GraphWriter;
 use crate::hash::{entity_id, normalize, predicate_id};
+use crate::hnsw::cache::WriteCache;
 use crate::hnsw::repair::{self, RepairOutcome};
 use crate::hnsw::{self, HnswParams};
 use crate::metrics::Metrics;
@@ -49,6 +50,16 @@ pub enum WriteResult {
 pub struct ApplyCtx<'a> {
     pub hnsw: &'a HnswParams,
     pub metrics: &'a Metrics,
+    /// Transaction-wide HNSW write-back cache; flushed before commit.
+    pub cache: &'a WriteCache,
+}
+
+/// Write cached HNSW nodes back and drop the cache (before code that
+/// reads or writes the HNSW tables directly).
+fn sync_cache(txn: &WriteTransaction, ctx: &ApplyCtx<'_>) -> Result<()> {
+    ctx.cache.flush(&mut txn.open_table(HNSW_NODES)?)?;
+    ctx.cache.clear();
+    Ok(())
 }
 
 pub fn apply(txn: &WriteTransaction, op: &WriteOp, ctx: &ApplyCtx<'_>) -> Result<WriteResult> {
@@ -67,9 +78,13 @@ pub fn apply(txn: &WriteTransaction, op: &WriteOp, ctx: &ApplyCtx<'_>) -> Result
             Metrics::add(&ctx.metrics.counters.events_logged, evs.len() as u64);
             Ok(WriteResult::Events(evs.iter().map(|e| e.id).collect()))
         }
-        WriteOp::Forget(ids) => apply_forget(txn, ids).map(WriteResult::Forget),
+        WriteOp::Forget(ids) => {
+            sync_cache(txn, ctx)?;
+            apply_forget(txn, ids).map(WriteResult::Forget)
+        }
         WriteOp::Auth(op) => crate::auth::ops::apply(txn, op).map(WriteResult::Auth),
         WriteOp::Repair => {
+            sync_cache(txn, ctx)?;
             let vectors = txn.open_table(VECTORS)?;
             let mut nodes = txn.open_table(HNSW_NODES)?;
             let ep = hnsw::EntryPoint::load(&txn.open_table(META)?)?;
@@ -177,7 +192,8 @@ fn apply_memorize(txn: &WriteTransaction, m: &PreparedMemorize, ctx: &ApplyCtx<'
                 }
             };
             chunks.insert(c.id, encode(&rec)?.as_slice())?;
-            let ins = hnsw::insert(&mut vectors, &mut nodes, &mut meta, ctx.hnsw, c.id, &c.unit)?;
+            let ins =
+                hnsw::insert::insert_cached(&mut vectors, &mut nodes, &mut meta, ctx.hnsw, c.id, &c.unit, ctx.cache)?;
             Metrics::add(&counters.hnsw_nodes_visited, ins.visited);
             if ins.unchanged {
                 out.unchanged += 1;
@@ -190,7 +206,10 @@ fn apply_memorize(txn: &WriteTransaction, m: &PreparedMemorize, ctx: &ApplyCtx<'
             out.chunk_ids.push(c.id);
         }
         let inserted = (out.chunk_ids.len() - out.unchanged) as u64;
-        if let Some(o) = repair::maybe_repair(&vectors, &mut nodes, &mut meta, ctx.hnsw, inserted)? {
+        if ctx.cache.dirty_len() >= crate::hnsw::cache::FLUSH_AT {
+            ctx.cache.flush(&mut nodes)?;
+        }
+        if let Some(o) = repair::maybe_repair(&vectors, &mut nodes, &mut meta, ctx.hnsw, inserted, Some(ctx.cache))? {
             note_repair(ctx.metrics, &o);
         }
     }
