@@ -34,10 +34,11 @@ impl Home {
         c.output().unwrap()
     }
 
+    /// Stdout of a successful run, with `/` as the path separator.
     fn ok(&self, args: &[&str]) -> String {
         let o = self.run(args);
         assert!(o.status.success(), "{args:?} failed: {}", String::from_utf8_lossy(&o.stderr));
-        String::from_utf8(o.stdout).unwrap()
+        String::from_utf8(o.stdout).unwrap().replace('\\', "/")
     }
 
     fn path(&self, rel: &str) -> PathBuf {

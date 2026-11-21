@@ -53,7 +53,8 @@ pub fn select(opts: &Options) -> Result<Vec<Client>, String> {
 /// `~` instead of the home directory, for messages.
 pub fn tilde(p: &Path) -> String {
     let h = home();
-    p.strip_prefix(&h).map_or_else(|_| p.display().to_string(), |r| format!("~/{}", r.display()))
+    p.strip_prefix(&h)
+        .map_or_else(|_| p.display().to_string(), |r| format!("~{}{}", std::path::MAIN_SEPARATOR, r.display()))
 }
 
 fn write(path: &Path, text: &str, dry: bool) -> Result<(), String> {
