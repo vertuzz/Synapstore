@@ -55,7 +55,7 @@ fn store<const R: usize>(c: &mut [f32], acc: &[[f32; COLS]; R], i: usize, j0: us
 fn tile_generic<const R: usize>(a: &[f32], w: &Packed, bias: &[f32; COLS], c: &mut [f32], i: usize, s: usize) {
     let k = w.k;
     let mut acc = [*bias; R];
-    for (p, wt) in w.strip(s).chunks_exact(COLS).enumerate() {
+    for (p, wt) in w.strip(s).as_chunks::<COLS>().0.iter().enumerate() {
         for (r, acc_r) in acc.iter_mut().enumerate() {
             let x = a[(i + r) * k + p];
             for q in 0..COLS {

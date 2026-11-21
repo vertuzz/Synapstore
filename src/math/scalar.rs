@@ -53,5 +53,5 @@ pub unsafe fn dot3_raw(a: *const f32, b: *const f32, n: usize) -> (f32, f32, f32
 
 /// Endianness-independent dot of `a` with little-endian bytes `b`.
 pub fn dot_le_portable(a: &[f32], b: &[u8]) -> f32 {
-    a.iter().zip(b.chunks_exact(4)).map(|(x, c)| x * f32::from_le_bytes([c[0], c[1], c[2], c[3]])).sum()
+    a.iter().zip(b.as_chunks::<4>().0).map(|(x, c)| x * f32::from_le_bytes(*c)).sum()
 }

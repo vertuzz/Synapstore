@@ -25,7 +25,7 @@ pub fn unhex(s: &str) -> Option<Vec<u8>> {
         return None;
     }
     let nib = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
-    b.chunks_exact(2).map(|p| Some(nib(p[0])? << 4 | nib(p[1])?)).collect()
+    b.as_chunks::<2>().0.iter().map(|p| Some(nib(p[0])? << 4 | nib(p[1])?)).collect()
 }
 
 /// Unpadded base64url (RFC 4648 §5).

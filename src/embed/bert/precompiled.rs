@@ -16,7 +16,7 @@ impl Precompiled {
         let bad = || Error::InvalidInput("tokenizer.json: malformed precompiled_charsmap".into());
         let size = u32::from_le_bytes(blob.get(..4).ok_or_else(bad)?.try_into().map_err(|_| bad())?) as usize;
         let trie_bytes = blob.get(4..4 + size).ok_or_else(bad)?;
-        let trie = trie_bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        let trie = trie_bytes.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect();
         Ok(Precompiled { trie, pool: blob[4 + size..].to_vec() })
     }
 

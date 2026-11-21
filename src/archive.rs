@@ -63,7 +63,7 @@ pub fn f32s_to_le(v: &[f32]) -> Vec<u8> {
 
 /// Decode little-endian f32 bytes into an owned vector.
 pub fn le_to_f32s(bytes: &[u8]) -> Vec<f32> {
-    bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
 }
 
 #[cfg(test)]
