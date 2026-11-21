@@ -223,9 +223,9 @@ Measured on a 4-vCPU cloud VM with an AVX2 release build (`cargo bench --bench h
 | Metric | Value |
 |---|---|
 | recall@10 (vs. brute force) | 1.00 |
-| query p50 / p95 | 443 µs / 605 µs |
-| build | 558 inserts/s, fully durable (1,898/s at 5k with the write-back cache) |
-| peak RSS | 80 MiB |
+| query p50 / p95 | 444 µs / 568 µs |
+| build | 1,587 inserts/s, fully durable (was 558/s before the write-back cache) |
+| peak RSS | 105 MiB |
 | SIMD speedup over scalar | 7.5× (384), 7.8× (768), 8.2× (1536) |
 
 **Synthetic agent workload: 329k stored records (dim 128)**
@@ -235,13 +235,14 @@ The workload has 66.7k memories, 49.5k facts and 200k episodes.
 | Metric | Value |
 |---|---|
 | recall@10 | 1.00 |
-| recall p50 / p95 (with decay) | 1.41 ms / 1.87 ms |
-| graph BFS depth-2 p50 / p95 | 1.86 ms / 2.41 ms (0 mismatches over 62k edges vs. reference BFS) |
+| recall p50 / p95 (with decay) | 1.25 ms / 1.48 ms |
+| graph BFS depth-2 p50 / p95 | 1.77 ms / 2.50 ms (0 mismatches over 62k edges vs. reference BFS) |
 | episodic scan p50 | 29 µs |
 | decay probes | 20/20 |
 | zero-copy reads | 0 B allocated per read |
 | unreachable HNSW nodes | 0 |
-| file / peak RSS | 272 MiB / 341 MiB |
+| file / peak RSS | 272 MiB / 399 MiB |
+| load | 840 memories/s (was 310/s), 47k events/s |
 
 ## Testing
 
