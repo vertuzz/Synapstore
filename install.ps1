@@ -41,6 +41,6 @@ if (-not ($userPath -split ';' | Where-Object { $_ -eq $dir })) {
 $env:Path = "$dir;$env:Path"
 
 if ($env:SYNAPSTORE_NO_SETUP -ne '1') {
-    $installArgs = if ($env:SYNAPSTORE_INSTALL_ARGS) { @($env:SYNAPSTORE_INSTALL_ARGS -split '\s+' | Where-Object { $_ }) } else { @() }
+    [string[]]$installArgs = if ($env:SYNAPSTORE_INSTALL_ARGS) { $env:SYNAPSTORE_INSTALL_ARGS -split '\s+' | Where-Object { $_ } } else { @() }
     & $bin install @installArgs
 }
