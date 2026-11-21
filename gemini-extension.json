@@ -1,6 +1,6 @@
 {
   "name": "synapstore",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Long-term memory across sessions (SynapStore MCP server). Needs the `synapstore` binary on PATH.",
   "mcpServers": {
     "synapstore": {

@@ -73,17 +73,14 @@ pub fn call(store: &SynapStore, name: &str, args: &Value) -> Call {
             Ok(json!({"count": events.len(), "events": to_value(events)?}))
         })(),
         "forget" => (|| {
-            let mut ids = Vec::new();
-            for s in opt_str_list(a, "ids")?.unwrap_or_default() {
-                ids.push(crate::hash::hex_to_id(&s).ok_or_else(|| Error::InvalidInput(format!("bad id `{s}`")))?);
-            }
+            let mut ids = id_list(a, "ids")?;
             if let Some(t) = opt_str(a, "text")? {
                 ids.push(chunk_id(t.trim()));
             }
             if ids.is_empty() {
                 return Err(Error::InvalidInput("provide `ids` or `text`".into()));
             }
-            Ok(json!({"forgotten": store.forget(ids)?}))
+            to_value(store.forget(ids)?)
         })(),
         "explain" => explain(store, a),
         "repair_index" => store.repair_index().and_then(to_value),
@@ -102,6 +99,7 @@ fn memorize(store: &SynapStore, a: &Value) -> Result<Value> {
         source: opt_str(a, "source")?.map(str::to_string),
         kind: opt_str(a, "kind")?.map(str::to_string),
         timestamp_ms: opt_u64(a, "timestamp_ms")?,
+        supersedes: id_list(a, "supersedes")?,
     };
     to_value(store.memorize(input)?)
 }

@@ -2,7 +2,7 @@
 //! writer thread. All writes are upserts (PRD §6.3).
 
 use super::prepare::{PreparedEvent, PreparedMemorize};
-use super::types::{FactInput, MemorizeOutcome};
+use super::types::{FactInput, ForgetOutcome, MemorizeOutcome};
 use crate::archive::{decode, encode};
 use crate::error::{Error, Result};
 use crate::graph::GraphWriter;
@@ -41,7 +41,7 @@ pub enum WriteResult {
     Facts(usize),
     Retract(bool),
     Events(Vec<u64>),
-    Forget(usize),
+    Forget(ForgetOutcome),
     Repair(RepairOutcome),
     Auth(crate::auth::AuthResult),
     Batch(Vec<WriteResult>),
@@ -257,9 +257,10 @@ fn append_event(txn: &WriteTransaction, e: &PreparedEvent) -> Result<()> {
     Ok(())
 }
 
-/// Delete chunks. Their HNSW nodes stay as routing tombstones (the vector
-/// is kept so the graph remains navigable); recall skips them.
-fn apply_forget(txn: &WriteTransaction, ids: &[u64]) -> Result<usize> {
+/// Delete chunks and the facts they asserted. Their HNSW nodes stay as
+/// routing tombstones (the vector is kept so the graph remains navigable);
+/// recall skips them.
+fn apply_forget(txn: &WriteTransaction, ids: &[u64]) -> Result<ForgetOutcome> {
     let mut removed = Vec::new();
     {
         let mut chunks = txn.open_table(CHUNKS)?;
@@ -276,5 +277,6 @@ fn apply_forget(txn: &WriteTransaction, ids: &[u64]) -> Result<usize> {
             g.unlink_chunk(*e, c.id)?;
         }
     }
-    Ok(removed.len())
+    let facts_retracted = g.retract_sourced(&removed.iter().map(|c| c.id).collect::<Vec<_>>())?;
+    Ok(ForgetOutcome { forgotten: removed.len(), facts_retracted })
 }

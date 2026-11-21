@@ -70,6 +70,20 @@ each agent's own mechanism:
 Several agents can use the same store at once: each one starts its own `synapstore mcp` process, and redb's
 multi-process mode serializes their writes.
 
+### Upgrading
+
+Nothing updates itself. What a new release changes and how it reaches each place:
+
+| Part | Where it lives | How to update |
+|---|---|---|
+| Store logic, MCP instructions and tool descriptions | the `synapstore` binary that serves MCP | replace the binary; agents pick up the new instructions on their next session |
+| Local CLI | `~/.local/bin` (Windows: `%LOCALAPPDATA%\synapstore\bin`) | rerun the install script (`SYNAPSTORE_NO_SETUP=1` only replaces the binary) |
+| Skill copies written by `synapstore install` | `~/.claude/skills`, `~/.agents/skills`, … | `synapstore install --only skill` with the new binary; it reports `already up to date` when nothing changed |
+| Claude Code plugin, Gemini extension, `npx skills` | read from this repository | update the plugin from `/plugin`, run `gemini extensions update synapstore`, or `npx skills add vertuzz/synapstore` again |
+
+A new binary opens existing store files in place as long as the schema version (`src/tables.rs`) is unchanged.
+Update the server before the clients: new tool arguments are optional, so older clients keep working.
+
 ## Quick start
 
 ```sh
@@ -227,6 +241,15 @@ To host a single shared store on a Linux server with a domain pointing to it:
    For scripts or CI without `synapstore install`, set `SYNAPSTORE_URL=https://memory.example.com/mcp` and
    `SYNAPSTORE_TOKEN=syn_…` (for example in a git-ignored `.env` file).
 
+6. **Upgrade** later by backing up the store, swapping the binary and restarting:
+
+   ```sh
+   sudo systemctl stop synapstore
+   sudo cp -a /var/lib/synapstore/memory.redb /var/lib/synapstore/memory.redb.bak
+   sudo install -m 0755 synapstore-x86_64-linux/synapstore /usr/local/bin/synapstore   # from the release tarball
+   sudo systemctl start synapstore && curl -fsS https://memory.example.com/healthz
+   ```
+
 ### Security model
 
 - **Tokens:** 256 bits from the OS CSPRNG, prefixed `syn_` so secret scanners recognize them.
@@ -254,13 +277,13 @@ To host a single shared store on a Linux server with a domain pointing to it:
 
 | Tool | Purpose |
 |---|---|
-| `memorize(text, vector?, entities?, facts?, tags?, …)` | Upsert a memory: chunk, embed, index, link entities, assert facts, log an episode |
+| `memorize(text, vector?, entities?, facts?, supersedes?, tags?, …)` | Upsert a memory: chunk, embed, index, link entities, assert facts, log an episode; `supersedes` forgets older memories in the same transaction |
 | `recall(query? \| vector?, top_k, max_age?, tags?, …)` | HNSW search re-ranked by time-decay |
 | `graph_query(subject, depth, direction?, predicate?)` | BFS over the knowledge graph + memories mentioning the entity |
 | `graph_match(subject?, predicate?, object?)` | Exact pattern lookup (omitted = wildcard) |
 | `add_facts`, `retract_fact` | Direct graph edits |
 | `log_event`, `recent_events` | Episodic log |
-| `forget(ids? \| text?)` | Delete memories |
+| `forget(ids? \| text?)` | Delete memories and retract the facts they asserted |
 | `explain(target_id \| target_text, query \| vector)` | Whitebox trace: exact rank, HNSW reachability, decay, filters → verdict |
 | `repair_index` | Reconnect unreachable HNSW nodes (also runs automatically) |
 | `stats(detailed?)` | Counts, index structure, embedder, latency histograms, counters |
@@ -277,7 +300,7 @@ default store, `--db <FILE>` or `$SYNAPSTORE_DB`; with `--url` / `$SYNAPSTORE_UR
 
 ```
 synapstore recall <QUERY> [-k N] [--max-age 7d] [--tag T]
-synapstore remember <TEXT|-> [--fact "s|p|o"]... [--tag T]... [--source S]
+synapstore remember <TEXT|-> [--fact "s|p|o"]... [--tag T]... [--source S] [--supersedes ID]...
 synapstore graph <ENTITY> [--depth N]          synapstore facts [--subject S] [--predicate P] [--object O]
 synapstore fact add|rm <S> <P> <O>             synapstore forget <ID>...
 synapstore log <TEXT|-> [--kind K]             synapstore events [--limit N] [--kind K]
@@ -324,6 +347,10 @@ Run `synapstore --help` for all flags. They include `--embedder`, `--allow-origi
   protected from the age penalty.
 - **Graph.** `SPO (s,p)→[o]`, `POS (p,o)→[s]` and `OPS (o,p)→[s]`, with packed sorted id lists. `TRIPLES` holds
   provenance, and `ENTITY_CHUNKS` links entities to memories.
+  - Facts are never derived from text: they come from `memorize(facts)` or `add_facts`. Entity *links* are
+    automatic (explicit `entities`, or runs of capitalized words).
+  - A fact's provenance is the latest memory that asserted it. `forget` retracts the facts whose provenance is a
+    deleted memory (a scan of `TRIPLES`; forgetting is rare), and facts added without a source are kept.
 
 Source layout: `src/{math,hnsw,graph,store,embed,http,auth,mcp,synth}`. Every module is under 300 lines (CI
 enforces it).

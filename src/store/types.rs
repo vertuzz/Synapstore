@@ -44,6 +44,9 @@ pub struct MemorizeInput {
     /// Episode kind recorded in the episodic log (default `"memory"`).
     pub kind: Option<String>,
     pub timestamp_ms: Option<u64>,
+    /// Memories this one replaces: forgotten (with the facts they asserted)
+    /// in the same transaction.
+    pub supersedes: Vec<u64>,
 }
 
 impl MemorizeInput {
@@ -71,6 +74,25 @@ pub struct MemorizeOutcome {
     pub facts_added: usize,
     pub embedding: String,
     pub dim: usize,
+    /// Memories removed through `supersedes`.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub superseded: usize,
+    /// Facts retracted along with the superseded memories.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub facts_retracted: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+/// Result of `forget`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct ForgetOutcome {
+    /// Memories that existed and were deleted.
+    pub forgotten: usize,
+    /// Facts whose provenance was one of those memories.
+    pub facts_retracted: usize,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -88,6 +88,8 @@ fn parses_memory_commands() {
     );
     assert!(o.json && !o.stdin_text);
     assert!(op(&["remember", "-"]).stdin_text);
+    let fix = op(&["remember", "User likes coffee", "--supersedes", "ab", "--replaces", "cd"]);
+    assert_eq!(fix.args, serde_json::json!({"text": "User likes coffee", "supersedes": ["ab", "cd"]}));
     let r = op(&["recall", "how", "to", "deploy", "-k", "3", "--max-age", "7d"]);
     assert_eq!(r.args, serde_json::json!({"query": "how to deploy", "top_k": 3, "max_age": "7d"}));
     assert_eq!(op(&["graph", "Postgres", "--depth", "1"]).args, serde_json::json!({"subject": "Postgres", "depth": 1}));

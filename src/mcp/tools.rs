@@ -37,13 +37,19 @@ pub fn definitions() -> Value {
             "memorize",
             "Store a memory. The text is chunked (when no vector is given), embedded, indexed in HNSW, \
              its entities are linked into the knowledge graph, facts are asserted, and an episode is appended. \
-             Idempotent: the same text (case/whitespace-insensitive) always maps to the same id and is upserted.",
+             Idempotent: the same text (case/whitespace-insensitive) always maps to the same id and is upserted. \
+             The store never derives facts from text: pass `facts` for durable relations (people and roles, \
+             family, places, ownership, projects and their stack, key dates). To correct a memory, pass its id \
+             in `supersedes` instead of only adding a new one.",
             json!({
                 "text": {"type": "string", "description": "Memory content."},
                 "vector": vector_schema("Embedding of `text`"),
                 "entities": {"type": "array", "items": {"type": "string"},
                     "description": "Entity names mentioned. Omit to auto-extract capitalized names."},
                 "facts": fact_schema(),
+                "supersedes": {"type": "array", "items": {"type": "string"},
+                    "description": "Ids of memories this one corrects or replaces. They are forgotten, with the \
+                        facts they asserted, in the same transaction."},
                 "tags": {"type": "array", "items": {"type": "string"}},
                 "source": {"type": "string", "description": "Provenance (file, URL, tool…)."},
                 "kind": {"type": "string", "description": "Episode kind for the episodic log (default \"memory\")."},
@@ -129,7 +135,8 @@ pub fn definitions() -> Value {
         ),
         tool(
             "forget",
-            "Delete memories by id or by exact text.",
+            "Delete memories by id or by exact text. Facts that a deleted memory asserted are retracted too; \
+             facts added with `add_facts` and no `source_id` are kept.",
             json!({"ids": {"type": "array", "items": {"type": "string"}},
                 "text": {"type": "string"}}),
             &[],

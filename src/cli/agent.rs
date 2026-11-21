@@ -11,6 +11,8 @@ use serde_json::{Map, Value, json};
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct AgentFlags {
     pub facts: Vec<String>,
+    /// Memory ids replaced by `remember`.
+    pub supersedes: Vec<String>,
     pub tags: Vec<String>,
     pub source: Option<String>,
     pub kind: Option<String>,
@@ -71,6 +73,7 @@ pub fn build(verb: &str, positional: Vec<String>, f: AgentFlags) -> Result<Op, S
             let stdin = text == "-";
             put(&mut a, "text", Some(json!(text)));
             put(&mut a, "facts", (!facts.is_empty()).then(|| json!(facts)));
+            put(&mut a, "supersedes", (!f.supersedes.is_empty()).then(|| json!(f.supersedes)));
             put(&mut a, "tags", tags);
             put(&mut a, "source", f.source.clone().map(Value::from));
             put(&mut a, "kind", f.kind.clone().map(Value::from));

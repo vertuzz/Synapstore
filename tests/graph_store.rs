@@ -124,3 +124,56 @@ fn memorize_links_entities_and_facts_to_memories() {
     let e = s.add_facts(vec![f("", "x", "y")], None, None).unwrap_err();
     assert!(matches!(e, Error::InvalidInput(_)));
 }
+
+fn works_at(s: &SynapStore, who: &str) -> Vec<String> {
+    s.graph_match(Some(who), Some("works_at"), None, 10).unwrap().into_iter().map(|x| x.object).collect()
+}
+
+#[test]
+fn forget_retracts_the_facts_a_memory_asserted() {
+    let (_d, s) = family();
+    let mut m = MemorizeInput::text("Dave works at Initech and lives in Austin.");
+    m.facts = vec![f("Dave", "works_at", "Initech"), f("Dave", "lives_in", "Austin"), f("Bob", "works_at", "Acme")];
+    let id = s.memorize(m).unwrap().chunk_ids[0];
+    let linked = s.add_facts(vec![f("Dave", "likes", "tea")], Some(id), None).unwrap();
+    assert_eq!(linked, 1);
+    let out = s.forget(vec![id, 42]).unwrap();
+    assert_eq!(out, ForgetOutcome { forgotten: 1, facts_retracted: 4 });
+    assert!(s.graph_match(Some("Dave"), None, None, 10).unwrap().is_empty());
+    assert!(works_at(&s, "Bob").is_empty(), "the memory was the latest source of Bob-works_at-Acme");
+    assert_eq!(works_at(&s, "Alice"), vec!["Acme"], "facts added without a source survive");
+    assert_eq!(s.graph_match(None, None, None, 100).unwrap().len(), 5);
+    assert_eq!(s.forget(vec![id]).unwrap(), ForgetOutcome::default());
+}
+
+#[test]
+fn supersedes_replaces_a_memory_and_its_facts_atomically() {
+    let (_d, s) = family();
+    let mut old = MemorizeInput::text("Erin is a PM at Globex.");
+    old.facts = vec![f("Erin", "works_at", "Globex"), f("Erin", "role", "PM")];
+    let old_id = s.memorize(old).unwrap().chunk_ids[0];
+    let mut new = MemorizeInput::text("Erin left Globex and joined Hooli as CTO.");
+    new.facts = vec![f("Erin", "works_at", "Hooli"), f("Erin", "role", "CTO")];
+    new.supersedes = vec![old_id];
+    let o = s.memorize(new).unwrap();
+    assert_eq!((o.created, o.facts_added, o.superseded, o.facts_retracted), (1, 2, 1, 2));
+    assert_eq!(works_at(&s, "Erin"), vec!["Hooli"]);
+    let out = s.graph_query(&GraphQuery::new("Erin")).unwrap();
+    assert_eq!(out.memories.iter().map(|m| m.id).collect::<Vec<_>>(), vec![o.chunk_ids[0]]);
+    let q = RecallQuery::text("Erin Globex", 5);
+    assert!(s.recall(&q).unwrap().hits.iter().all(|h| h.id != old_id));
+
+    // Re-memorizing the same text while superseding itself keeps it and its facts.
+    let mut same = MemorizeInput::text("Erin left Globex and joined Hooli as CTO.");
+    same.facts = vec![f("Erin", "works_at", "Hooli")];
+    same.supersedes = vec![o.chunk_ids[0]];
+    let again = s.memorize(same).unwrap();
+    assert_eq!((again.chunk_ids[0], again.superseded), (o.chunk_ids[0], 1));
+    assert_eq!(works_at(&s, "Erin"), vec!["Hooli"]);
+    assert_eq!(s.graph_query(&GraphQuery::new("Erin")).unwrap().memories.len(), 1);
+
+    // An unknown id in `supersedes` is not an error.
+    let mut lone = MemorizeInput::text("Frank joined Hooli.");
+    lone.supersedes = vec![7];
+    assert_eq!(s.memorize(lone).unwrap().superseded, 0);
+}

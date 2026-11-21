@@ -58,6 +58,9 @@ pub fn render(view: View, v: &Value) -> String {
                     let _ = write!(o, ", {n} facts");
                 }
             }
+            if let Some(n) = v["superseded"].as_u64().filter(|n| *n > 0) {
+                let _ = write!(o, ", replaced {n}");
+            }
             o.push(')');
         }
         View::Recall => {
@@ -131,6 +134,13 @@ pub fn render(view: View, v: &Value) -> String {
         View::Forgot => {
             let n = v["forgotten"].as_u64().unwrap_or(0);
             let _ = write!(o, "forgot {n} memor{}", if n == 1 { "y" } else { "ies" });
+            match v["facts_retracted"].as_u64().unwrap_or(0) {
+                0 => {}
+                1 => o.push_str(" and 1 fact"),
+                f => {
+                    let _ = write!(o, " and {f} facts");
+                }
+            }
         }
         View::Json => o = serde_json::to_string_pretty(v).unwrap_or_default(),
     }
@@ -158,6 +168,12 @@ mod tests {
         let m = json!({"chunk_ids": ["ab"], "created": 1, "facts_added": 2});
         assert_eq!(render(View::Remember, &m), "remembered ab (new, 2 facts)");
         assert_eq!(render(View::Forgot, &json!({"forgotten": 1})), "forgot 1 memory");
+        assert_eq!(
+            render(View::Forgot, &json!({"forgotten": 2, "facts_retracted": 3})),
+            "forgot 2 memories and 3 facts"
+        );
+        let r = json!({"chunk_ids": ["ef"], "created": 1, "facts_added": 1, "superseded": 1});
+        assert_eq!(render(View::Remember, &r), "remembered ef (new, 1 fact, replaced 1)");
         assert_eq!(render(View::Logged, &json!({"id": "cd"})), "logged cd");
     }
 }

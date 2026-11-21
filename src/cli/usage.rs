@@ -14,6 +14,7 @@ SET UP YOUR AGENTS:
 MEMORY (store: --db, else $SYNAPSTORE_DB, else ~/.synapstore/memory.redb):
     synapstore recall <QUERY> [-k N] [--max-age 7d] [--tag T]
     synapstore remember <TEXT|-> [--fact \"s|p|o\"]... [--tag T]... [--source S]
+                        [--supersedes <ID>]...   Replace older memories (and their facts)
     synapstore graph <ENTITY> [--depth N]
     synapstore facts [--subject S] [--predicate P] [--object O]
     synapstore fact add|rm <S> <P> <O>

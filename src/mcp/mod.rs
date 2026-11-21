@@ -17,9 +17,15 @@ use std::io::{BufRead, Write};
 pub const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 const INSTRUCTIONS: &str = "SynapStore is your long-term memory. Use `memorize` to store facts, decisions and \
-observations (add `facts` as subject/predicate/object for exact knowledge), `recall` to search semantically \
-(fresh memories rank higher), `graph_query` to get everything known about an entity, and `log_event` / \
-`recent_events` for the episodic timeline. Use `explain` when an expected memory is not recalled.";
+observations, `recall` to search semantically (fresh memories rank higher), `graph_query` to get everything known \
+about an entity, and `log_event` / `recent_events` for the episodic timeline. Use `explain` when an expected memory \
+is not recalled.\n\nThe knowledge graph is only as good as the `facts` you pass: the store never extracts them from \
+text. Whenever a memory states a durable relation (people and their roles, family, places, employers, ownership, \
+projects and their stack, key dates), add it to `memorize` as [subject, predicate, object]. Reuse existing entity \
+names (`graph_match` shows them) and short snake_case predicates (works_at, parent_of, lives_in, owns, uses). Do not \
+turn fast-changing state (prices, daily status) into facts. When something changes or was wrong, memorize the \
+corrected text with the old memory's id in `supersedes`: the old memory and its facts are removed atomically. For a \
+fact added without a memory, `retract_fact` the old one before adding the new one.";
 
 pub struct Server {
     store: SynapStore,
