@@ -36,9 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS runners are not available to this repository (jobs are cancelled
-        # before starting); NEON is covered by ubuntu-24.04-arm. Re-add macos-14 if enabled.
-        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

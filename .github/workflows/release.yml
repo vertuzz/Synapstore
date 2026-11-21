@@ -36,12 +36,9 @@ jobs:
           - { os: ubuntu-24.04, target: x86_64-unknown-linux-musl, asset: synapstore-x86_64-linux }
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, asset: synapstore-aarch64-linux }
           - { os: windows-2022, target: x86_64-pc-windows-msvc, asset: synapstore-x86_64-windows }
-          # macOS runners are not available to this repository today; when they are, these
-          # entries publish too. Until then install.sh builds from source on macOS.
-          - { os: macos-14, target: aarch64-apple-darwin, asset: synapstore-aarch64-macos }
-          - { os: macos-14, target: x86_64-apple-darwin, asset: synapstore-x86_64-macos }
+          - { os: macos-15, target: aarch64-apple-darwin, asset: synapstore-aarch64-macos }
+          - { os: macos-15, target: x86_64-apple-darwin, asset: synapstore-x86_64-macos }
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ startsWith(matrix.os, 'macos') }}
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
