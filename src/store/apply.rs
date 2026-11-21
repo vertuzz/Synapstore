@@ -28,6 +28,8 @@ pub enum WriteOp {
     Forget(Vec<u64>),
     /// Reconnect unreachable HNSW nodes.
     Repair,
+    /// API-token administration.
+    Auth(crate::auth::AuthOp),
     /// Several operations committed atomically together.
     Batch(Vec<WriteOp>),
 }
@@ -40,6 +42,7 @@ pub enum WriteResult {
     Events(Vec<u64>),
     Forget(usize),
     Repair(RepairOutcome),
+    Auth(crate::auth::AuthResult),
     Batch(Vec<WriteResult>),
 }
 
@@ -65,6 +68,7 @@ pub fn apply(txn: &WriteTransaction, op: &WriteOp, ctx: &ApplyCtx<'_>) -> Result
             Ok(WriteResult::Events(evs.iter().map(|e| e.id).collect()))
         }
         WriteOp::Forget(ids) => apply_forget(txn, ids).map(WriteResult::Forget),
+        WriteOp::Auth(op) => crate::auth::ops::apply(txn, op).map(WriteResult::Auth),
         WriteOp::Repair => {
             let vectors = txn.open_table(VECTORS)?;
             let mut nodes = txn.open_table(HNSW_NODES)?;
@@ -134,11 +138,11 @@ fn merge_chunk(old: Chunk, m: &PreparedMemorize, entity_ids: &[u64]) -> Chunk {
 fn apply_memorize(txn: &WriteTransaction, m: &PreparedMemorize, ctx: &ApplyCtx<'_>) -> Result<MemorizeOutcome> {
     let dim = m.chunks.first().map_or(0, |c| c.unit.len());
     let mut out =
-        MemorizeOutcome { entities: m.entities.clone(), embedding: m.embedding.into(), dim, ..Default::default() };
+        MemorizeOutcome { entities: m.entities.clone(), embedding: m.embedding.clone(), dim, ..Default::default() };
     if m.chunks.is_empty() {
         return Ok(out);
     }
-    check_space(txn, dim, m.embedding)?;
+    check_space(txn, dim, &m.embedding)?;
     let mut g = GraphWriter::open(txn)?;
     let entity_ids = m.entities.iter().map(|e| g.upsert_term(TERM_ENTITY, e, m.ts)).collect::<Result<Vec<u64>>>()?;
     let counters = &ctx.metrics.counters;

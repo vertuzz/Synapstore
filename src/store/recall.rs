@@ -5,7 +5,7 @@ use super::SynapStore;
 use super::types::{RecallHit, RecallOutcome, RecallQuery};
 use crate::archive;
 use crate::decay::{self, DAY_MS, DecayParams};
-use crate::embed::{self, SOURCE_BUILTIN, SOURCE_EXTERNAL};
+use crate::embed::{self, Embedder, SOURCE_EXTERNAL};
 use crate::error::{Error, Result};
 use crate::hnsw::{self, EntryPoint, Scored, View};
 use crate::math;
@@ -19,19 +19,25 @@ use redb::{ReadableDatabase, ReadableTable};
 pub const MAX_EF: usize = 4096;
 
 /// Resolve the query into a unit vector living in the store's space.
-pub fn query_vector(vector: Option<&[f32]>, text: Option<&str>, dim: usize, store_src: &str) -> Result<Vec<f32>> {
+pub fn query_vector(
+    vector: Option<&[f32]>,
+    text: Option<&str>,
+    dim: usize,
+    store_src: &str,
+    embedder: &dyn Embedder,
+) -> Result<Vec<f32>> {
     let unit = match (vector, text) {
         (Some(v), _) => {
-            if store_src == SOURCE_BUILTIN {
+            if store_src != SOURCE_EXTERNAL {
                 return Err(Error::EmbeddingMismatch { store: store_src.into(), request: SOURCE_EXTERNAL.into() });
             }
             math::normalize(v)?
         }
         (None, Some(t)) if !t.trim().is_empty() => {
-            if store_src != SOURCE_BUILTIN {
-                return Err(Error::EmbeddingMismatch { store: store_src.into(), request: SOURCE_BUILTIN.into() });
+            if store_src != embedder.source() {
+                return Err(Error::EmbeddingMismatch { store: store_src.into(), request: embedder.source().into() });
             }
-            embed::embed(t, dim)
+            embed::query_in_space(embedder, t, dim)?
         }
         _ => {
             return Err(Error::InvalidInput("provide `vector` or a non-empty `query` text".into()));
@@ -138,7 +144,7 @@ impl SynapStore {
         else {
             return Ok(RecallOutcome { embedding: "none".into(), ..Default::default() });
         };
-        let unit = query_vector(q.vector.as_deref(), q.text.as_deref(), dim as usize, &src)?;
+        let unit = query_vector(q.vector.as_deref(), q.text.as_deref(), dim as usize, &src, self.embedder())?;
         let Some(ep) = EntryPoint::load(&meta)? else {
             return Ok(RecallOutcome { embedding: src, ..Default::default() });
         };

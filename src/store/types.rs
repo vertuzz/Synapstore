@@ -88,6 +88,17 @@ pub struct RecallQuery {
     pub tags: Vec<String>,
 }
 
+impl RecallQuery {
+    /// Search by text with the store's embedder.
+    pub fn text(query: impl Into<String>, top_k: usize) -> Self {
+        RecallQuery { text: Some(query.into()), top_k, ..Default::default() }
+    }
+    /// Search by a caller-provided embedding.
+    pub fn vector(v: Vec<f32>, top_k: usize) -> Self {
+        RecallQuery { vector: Some(v), top_k, ..Default::default() }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RecallHit {
     #[serde(serialize_with = "hex::one")]

@@ -4,7 +4,7 @@
 
 use super::types::{EventInput, FactInput, MemorizeInput};
 use crate::chunker::chunk_text;
-use crate::embed::{self, SOURCE_BUILTIN, SOURCE_EXTERNAL};
+use crate::embed::{Embedder, SOURCE_EXTERNAL};
 use crate::error::{Error, Result};
 use crate::extract::extract_entities;
 use crate::graph::validate_name;
@@ -39,7 +39,7 @@ pub struct PreparedMemorize {
     pub tags: Vec<String>,
     pub source: String,
     pub ts: u64,
-    pub embedding: &'static str,
+    pub embedding: String,
     pub event: PreparedEvent,
 }
 
@@ -85,12 +85,12 @@ pub fn prepare_event(e: &EventInput, now: u64) -> Result<PreparedEvent> {
     })
 }
 
-/// Validate and expand a `memorize` request. `builtin_dim` is the dimension
-/// used by the built-in embedder (the store's dimension if already set).
+/// Validate and expand a `memorize` request; text without a caller vector
+/// is chunked and embedded with `embedder` (on the caller's thread).
 pub fn prepare_memorize(
     input: &MemorizeInput,
     now: u64,
-    builtin_dim: usize,
+    embedder: &dyn Embedder,
     max_chunk_chars: usize,
 ) -> Result<PreparedMemorize> {
     check_text(&input.text)?;
@@ -98,14 +98,19 @@ pub fn prepare_memorize(
         Some(v) => {
             let unit = math::normalize(v)?;
             let text = input.text.trim().to_string();
-            (vec![PreparedChunk { id: chunk_id(&text), text, unit }], SOURCE_EXTERNAL)
+            (vec![PreparedChunk { id: chunk_id(&text), text, unit }], SOURCE_EXTERNAL.to_string())
         }
         None => {
-            let chunks = chunk_text(&input.text, max_chunk_chars)
+            let size = embedder.chunk_chars().map_or(max_chunk_chars, |c| c.min(max_chunk_chars));
+            let texts = chunk_text(&input.text, size);
+            let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+            let vecs = embedder.embed_documents(&refs)?;
+            let chunks = texts
                 .into_iter()
-                .map(|t| PreparedChunk { id: chunk_id(&t), unit: embed::embed(&t, builtin_dim), text: t })
-                .collect();
-            (chunks, SOURCE_BUILTIN)
+                .zip(vecs)
+                .map(|(t, v)| Ok(PreparedChunk { id: chunk_id(&t), unit: math::normalize(&v)?, text: t }))
+                .collect::<Result<Vec<_>>>()?;
+            (chunks, embedder.source().to_string())
         }
     };
     let mut entities: Vec<String> = match &input.entities {
@@ -152,6 +157,11 @@ pub fn prepare_memorize(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::embed::Lexical;
+
+    fn prepare_memorize(input: &MemorizeInput, now: u64, dim: usize, chunk: usize) -> Result<PreparedMemorize> {
+        super::prepare_memorize(input, now, &Lexical { dim }, chunk)
+    }
 
     #[test]
     fn external_vector_is_single_normalized_chunk() {

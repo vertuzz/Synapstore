@@ -2,8 +2,10 @@
 #![deny(warnings)]
 
 pub mod archive;
+pub mod auth;
 pub mod chunker;
 pub mod cli;
+pub mod crypto;
 pub mod decay;
 pub mod embed;
 pub mod error;
@@ -11,6 +13,7 @@ pub mod extract;
 pub mod graph;
 pub mod hash;
 pub mod hnsw;
+pub mod http;
 pub mod idlist;
 pub mod logger;
 pub mod math;

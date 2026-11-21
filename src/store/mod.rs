@@ -7,14 +7,16 @@ pub mod explain;
 pub mod prepare;
 pub mod reads;
 pub mod recall;
+pub mod space;
 pub mod stats;
+pub mod tokens;
 pub mod types;
 pub mod writer;
 
 pub use types::*;
 
 use crate::decay::DecayParams;
-use crate::embed::{BUILTIN_DIM, SOURCE_BUILTIN};
+use crate::embed::{BUILTIN_DIM, Embedder, EmbedderSpec};
 use crate::error::{Error, Result};
 use crate::hnsw::HnswParams;
 use crate::logger::{Log, LogConfig, Logger};
@@ -36,7 +38,11 @@ pub struct Config {
     pub retry: RetryPolicy,
     /// redb page-cache size.
     pub cache_bytes: usize,
-    /// Dimension of the built-in embedder for a fresh store.
+    /// Text embedder (see [`EmbedderSpec`]); `Auto` reuses the store's.
+    pub embedder: EmbedderSpec,
+    /// Print embedder status (model downloads) to stderr.
+    pub embedder_progress: bool,
+    /// Dimension of the lexical embedder for a fresh store.
     pub builtin_dim: usize,
     pub max_chunk_chars: usize,
     pub log: Option<LogConfig>,
@@ -49,6 +55,8 @@ impl Default for Config {
             decay: DecayParams::default(),
             retry: RetryPolicy::default(),
             cache_bytes: 256 * 1024 * 1024,
+            embedder: EmbedderSpec::Auto,
+            embedder_progress: false,
             builtin_dim: BUILTIN_DIM,
             max_chunk_chars: 1200,
             log: None,
@@ -62,6 +70,7 @@ struct Inner {
     writer: Writer,
     metrics: Arc<Metrics>,
     log: Log,
+    embedder: Arc<dyn Embedder>,
     cfg: Config,
     path: PathBuf,
 }
@@ -78,8 +87,12 @@ impl SynapStore {
         let path = path.as_ref().to_path_buf();
         let log = Log(cfg.log.clone().map(Logger::open).transpose()?.map(Arc::new));
         let db = Arc::new(retry::open_database(&path, cfg.cache_bytes, &cfg.retry)?);
+        // Resolve the embedder before taking the write lock: it may download.
+        let rec = space::recorded(&db)?;
+        let embedder = space::resolve(&rec, &cfg, &log)?;
         let (txn, _) = retry::begin_write(&db, &cfg.retry)?;
         tables::create_all(&txn)?;
+        space::pin(&txn, &rec, &cfg, embedder.as_ref())?;
         {
             // Structural HNSW parameters are fixed at creation time.
             let mut meta = txn.open_table(META)?;
@@ -109,7 +122,7 @@ impl SynapStore {
             log: log.clone(),
         })?;
         log.info("open", &[("path", path.display().to_string()), ("simd", crate::math::backend().into())]);
-        Ok(SynapStore { inner: Arc::new(Inner { db, writer, metrics, log, cfg, path }) })
+        Ok(SynapStore { inner: Arc::new(Inner { db, writer, metrics, log, embedder, cfg, path }) })
     }
 
     pub fn path(&self) -> &Path {
@@ -123,6 +136,10 @@ impl SynapStore {
     }
     pub fn log(&self) -> &Log {
         &self.inner.log
+    }
+    /// The text embedder used for `memorize`/`recall` without vectors.
+    pub fn embedder(&self) -> &dyn Embedder {
+        self.inner.embedder.as_ref()
     }
     pub(crate) fn db(&self) -> &Database {
         &self.inner.db
@@ -146,7 +163,7 @@ impl SynapStore {
         r
     }
 
-    fn write(&self, op: WriteOp) -> Result<WriteResult> {
+    pub(crate) fn write(&self, op: WriteOp) -> Result<WriteResult> {
         self.inner.writer.submit(op)
     }
 
@@ -158,16 +175,8 @@ impl SynapStore {
         Ok((dim, src))
     }
 
-    fn builtin_dim(&self) -> Result<usize> {
-        let (dim, src) = self.space()?;
-        Ok(match (dim, src.as_deref()) {
-            (Some(d), Some(SOURCE_BUILTIN)) => d,
-            _ => self.inner.cfg.builtin_dim,
-        })
-    }
-
-    fn prepare(&self, input: &MemorizeInput, dim: usize) -> Result<WriteOp> {
-        let p = prepare::prepare_memorize(input, now_ms(), dim, self.inner.cfg.max_chunk_chars)?;
+    fn prepare(&self, input: &MemorizeInput) -> Result<WriteOp> {
+        let p = prepare::prepare_memorize(input, now_ms(), self.embedder(), self.inner.cfg.max_chunk_chars)?;
         Ok(WriteOp::Memorize(Box::new(p)))
     }
 
@@ -175,7 +184,7 @@ impl SynapStore {
     /// assert facts and append an episode.
     pub fn memorize(&self, input: MemorizeInput) -> Result<MemorizeOutcome> {
         self.timed(Op::Memorize, || {
-            let op = self.prepare(&input, self.builtin_dim()?)?;
+            let op = self.prepare(&input)?;
             match self.write(op)? {
                 WriteResult::Memorize(o) => Ok(o),
                 other => Err(Error::Storage(format!("unexpected writer result {other:?}"))),
@@ -186,8 +195,9 @@ impl SynapStore {
     /// Memorize many items in a single transaction (bulk loading).
     pub fn memorize_batch(&self, inputs: &[MemorizeInput]) -> Result<Vec<MemorizeOutcome>> {
         self.timed(Op::Memorize, || {
-            let dim = self.builtin_dim()?;
-            let ops = inputs.iter().map(|i| self.prepare(i, dim)).collect::<Result<Vec<_>>>()?;
+            // Embedding is the expensive part: spread inputs over the cores.
+            let ops =
+                crate::embed::parallel_map(inputs, |i| self.prepare(i)).into_iter().collect::<Result<Vec<_>>>()?;
             match self.write(WriteOp::Batch(ops))? {
                 WriteResult::Batch(rs) => Ok(rs
                     .into_iter()

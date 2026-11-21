@@ -52,6 +52,8 @@ impl SynapStore {
             "vector": {
                 "dim": meta_get(&meta, keys::DIM)?,
                 "source": meta_str_get(&txn.open_table(META_STR)?, keys::EMBEDDING_SOURCE)?,
+                "embedder": self.embedder().source(),
+                "embedder_spec": meta_str_get(&txn.open_table(META_STR)?, keys::EMBEDDER_SPEC)?,
             },
             "counts": {
                 "chunks": chunks,

@@ -6,6 +6,7 @@ pub mod handlers;
 pub mod jsonrpc;
 pub mod tools;
 
+use crate::auth::{Scope, tool_scope};
 use crate::store::SynapStore;
 use handlers::Call;
 use jsonrpc::{Incoming, classify, error, success};
@@ -23,6 +24,8 @@ observations (add `facts` as subject/predicate/object for exact knowledge), `rec
 pub struct Server {
     store: SynapStore,
     protocol: Option<String>,
+    /// Permissions of the caller; `None` = unrestricted (stdio).
+    scope: Option<Scope>,
 }
 
 /// Pick the protocol version to answer `initialize` with.
@@ -32,7 +35,16 @@ pub fn negotiate(requested: Option<&str>) -> &'static str {
 
 impl Server {
     pub fn new(store: SynapStore) -> Self {
-        Server { store, protocol: None }
+        Server { store, protocol: None, scope: None }
+    }
+
+    /// A server whose tools are limited to what `scope` allows.
+    pub fn scoped(store: SynapStore, scope: Scope) -> Self {
+        Server { store, protocol: None, scope: Some(scope) }
+    }
+
+    fn allowed(&self, tool: &str) -> bool {
+        self.scope.is_none_or(|s| s >= tool_scope(tool))
     }
 
     pub fn protocol(&self) -> Option<&str> {
@@ -47,16 +59,23 @@ impl Server {
         }
         let out = match serde_json::from_str::<Value>(line) {
             Err(e) => Some(error(Value::Null, jsonrpc::PARSE_ERROR, "parse error", Some(json!(e.to_string())))),
-            Ok(Value::Array(batch)) if batch.is_empty() => {
+            Ok(v) => self.handle_json(v),
+        };
+        out.map(|v| v.to_string())
+    }
+
+    /// Handle one decoded message or batch; `None` if nothing to reply.
+    pub fn handle_json(&mut self, v: Value) -> Option<Value> {
+        match v {
+            Value::Array(batch) if batch.is_empty() => {
                 Some(error(Value::Null, jsonrpc::INVALID_REQUEST, "empty batch", None))
             }
-            Ok(Value::Array(batch)) => {
+            Value::Array(batch) => {
                 let replies: Vec<Value> = batch.into_iter().filter_map(|m| self.handle_value(m)).collect();
                 (!replies.is_empty()).then_some(Value::Array(replies))
             }
-            Ok(v) => self.handle_value(v),
-        };
-        out.map(|v| v.to_string())
+            v => self.handle_value(v),
+        }
     }
 
     /// Handle one decoded message.
@@ -88,7 +107,17 @@ impl Server {
                 )
             }
             "ping" => success(id, json!({})),
-            "tools/list" => success(id, json!({"tools": tools::definitions()})),
+            "tools/list" => {
+                let all = tools::definitions();
+                let visible: Vec<Value> = all
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|t| t["name"].as_str().is_some_and(|n| self.allowed(n)))
+                    .cloned()
+                    .collect();
+                success(id, json!({"tools": visible}))
+            }
             "resources/list" => success(id, json!({"resources": []})),
             "resources/templates/list" => success(id, json!({"resourceTemplates": []})),
             "prompts/list" => success(id, json!({"prompts": []})),
@@ -103,6 +132,18 @@ impl Server {
             return error(id, jsonrpc::INVALID_PARAMS, "tools/call requires `name`", None);
         };
         let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+        if tools::definitions().as_array().is_some_and(|d| d.iter().any(|t| t["name"] == name)) && !self.allowed(name) {
+            let need = tool_scope(name).as_str();
+            let msg = format!("tool `{name}` needs a token with `{need}` scope");
+            return success(
+                id,
+                json!({
+                    "content": [{"type": "text", "text": format!("forbidden error: {msg}")}],
+                    "structuredContent": {"error": {"kind": "forbidden", "message": msg}},
+                    "isError": true,
+                }),
+            );
+        }
         match handlers::call(&self.store, name, &args) {
             Call::UnknownTool => error(id, jsonrpc::INVALID_PARAMS, &format!("unknown tool: {name}"), None),
             Call::Done(Ok(value)) => {

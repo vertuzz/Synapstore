@@ -3,6 +3,7 @@
 //! scalar elsewhere). Every kernel uses *unaligned* loads, so stored vectors
 //! can be scored directly inside redb page buffers without copying.
 
+pub mod gemm;
 #[cfg(target_arch = "aarch64")]
 pub mod neon;
 pub mod scalar;

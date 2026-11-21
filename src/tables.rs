@@ -14,6 +14,7 @@
 //! | `episodes`     | (ts_ms, event id)     | rkyv [`MemoryItem`](crate::model::MemoryItem) |
 //! | `meta`         | &str                  | u64                           |
 //! | `meta_str`     | &str                  | &str                          |
+//! | `auth_tokens`  | SHA-256 of the secret | rkyv [`ApiToken`](crate::model::ApiToken) |
 
 use crate::error::Result;
 use redb::{ReadableTable, TableDefinition, WriteTransaction};
@@ -33,12 +34,15 @@ pub const ENTITY_CHUNKS: TableDefinition<u64, &[u8]> = TableDefinition::new("ent
 pub const EPISODES: TableDefinition<Pair, &[u8]> = TableDefinition::new("episodes");
 pub const META: TableDefinition<&str, u64> = TableDefinition::new("meta");
 pub const META_STR: TableDefinition<&str, &str> = TableDefinition::new("meta_str");
+pub const AUTH_TOKENS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("auth_tokens");
 
 /// Keys of the `meta` / `meta_str` tables.
 pub mod keys {
     pub const SCHEMA_VERSION: &str = "schema_version";
     pub const DIM: &str = "vector.dim";
     pub const EMBEDDING_SOURCE: &str = "vector.source";
+    /// The `--embedder` spec that produced the store's vectors.
+    pub const EMBEDDER_SPEC: &str = "embedder.spec";
     pub const HNSW_ENTRY: &str = "hnsw.entry";
     pub const HNSW_MAX_LEVEL: &str = "hnsw.max_level";
     pub const HNSW_COUNT: &str = "hnsw.count";
@@ -63,6 +67,7 @@ pub fn create_all(txn: &WriteTransaction) -> Result<()> {
     txn.open_table(ENTITY_CHUNKS)?;
     txn.open_table(EPISODES)?;
     txn.open_table(META_STR)?;
+    txn.open_table(AUTH_TOKENS)?;
     let mut meta = txn.open_table(META)?;
     if meta.get(keys::SCHEMA_VERSION)?.is_none() {
         meta.insert(keys::SCHEMA_VERSION, SCHEMA_VERSION)?;

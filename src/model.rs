@@ -81,3 +81,17 @@ impl HnswNode {
         HnswNode { level, layers: vec![Vec::new(); usize::from(level) + 1] }
     }
 }
+
+/// An API token for the HTTP transport. Only the SHA-256 of the secret is
+/// stored (it is the table key), never the secret itself.
+#[derive(Archive, Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ApiToken {
+    pub name: String,
+    /// 0 = read, 1 = write, 2 = admin.
+    pub scope: u8,
+    pub created_at: u64,
+    /// Unix milliseconds; 0 = never expires.
+    pub expires_at: u64,
+    /// Unix milliseconds, updated at most every few minutes; 0 = never used.
+    pub last_used_at: u64,
+}

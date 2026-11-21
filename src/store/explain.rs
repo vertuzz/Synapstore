@@ -97,7 +97,7 @@ impl SynapStore {
             ex.verdict = "store_is_empty".into();
             return Ok(ex);
         };
-        let unit = query_vector(q.vector.as_deref(), q.text.as_deref(), dim as usize, &src)?;
+        let unit = query_vector(q.vector.as_deref(), q.text.as_deref(), dim as usize, &src, self.embedder())?;
         if let Some(g) = vectors.get(q.target)? {
             let sim = math::dot_le(&unit, g.value());
             ex.exact_similarity = Some(sim);
