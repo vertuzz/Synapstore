@@ -1,0 +1,17 @@
+{
+  "name": "synapstore",
+  "displayName": "SynapStore memory",
+  "version": "0.1.0",
+  "description": "Long-term memory across sessions: semantic recall, a knowledge graph and an event log in one local file. Needs the `synapstore` binary on PATH.",
+  "author": { "name": "vertuzz", "url": "https://github.com/vertuzz" },
+  "homepage": "https://github.com/vertuzz/synapstore",
+  "repository": "https://github.com/vertuzz/synapstore",
+  "license": "Apache-2.0",
+  "keywords": ["memory", "mcp", "vector-database", "knowledge-graph"],
+  "mcpServers": {
+    "synapstore": {
+      "command": "synapstore",
+      "args": ["mcp"]
+    }
+  }
+}

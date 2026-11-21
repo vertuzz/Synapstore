@@ -1,0 +1,76 @@
+name: Release
+
+# Push a tag like v0.2.0 to publish prebuilt binaries; install.sh / install.ps1
+# download them from the latest release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v0.2.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  create:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the release (if missing)
+        run: gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --generate-notes --title "$TAG"
+
+  build:
+    needs: create
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-musl, asset: synapstore-x86_64-linux }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, asset: synapstore-aarch64-linux }
+          - { os: windows-2022, target: x86_64-pc-windows-msvc, asset: synapstore-x86_64-windows }
+          # macOS runners are not available to this repository today; when they are, these
+          # entries publish too. Until then install.sh builds from source on macOS.
+          - { os: macos-14, target: aarch64-apple-darwin, asset: synapstore-aarch64-macos }
+          - { os: macos-14, target: x86_64-apple-darwin, asset: synapstore-x86_64-macos }
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ startsWith(matrix.os, 'macos') }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          dir=${{ matrix.asset }}
+          mkdir "$dir"
+          cp target/${{ matrix.target }}/release/synapstore README.md LICENSE "$dir"/
+          tar -czf "$dir.tar.gz" "$dir"
+          shasum -a 256 "$dir.tar.gz" > "$dir.tar.gz.sha256"
+          gh release upload "$TAG" "$dir.tar.gz" "$dir.tar.gz.sha256" --clobber
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = "${{ matrix.asset }}"
+          New-Item -ItemType Directory $dir | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/synapstore.exe, README.md, LICENSE $dir
+          Compress-Archive -Path $dir -DestinationPath "$dir.zip"
+          $h = (Get-FileHash "$dir.zip" -Algorithm SHA256).Hash.ToLower()
+          "$h  $dir.zip" | Out-File -Encoding ascii -NoNewline "$dir.zip.sha256"
+          gh release upload $env:TAG "$dir.zip" "$dir.zip.sha256" --clobber

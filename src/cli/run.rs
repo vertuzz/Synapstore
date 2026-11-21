@@ -19,8 +19,16 @@ macro_rules! out {
     }};
 }
 
+/// Print a block of text to stdout (quietly ends on a closed pipe).
+pub fn print(text: &str) {
+    out!("{text}");
+}
+
 fn open(c: &Cli) -> Result<SynapStore, String> {
-    let db = c.db.clone().unwrap_or_default();
+    let db = c.db.clone().unwrap_or_else(crate::paths::default_db);
+    if let Some(dir) = db.parent().filter(|d| !d.as_os_str().is_empty() && !d.exists()) {
+        std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
     let mut cfg = c.config.clone();
     cfg.embedder_progress = true;
     SynapStore::open(&db, cfg).map_err(|e| format!("cannot open {}: {e}", db.display()))
@@ -128,6 +136,19 @@ pub fn run(c: Cli) -> Result<(), String> {
             store.log().info("shutdown", &[("metrics", snapshot)]);
         }
         Command::Http(opts) => serve_http(&c, opts)?,
+        Command::Agent(op) => {
+            let mut op = op.clone();
+            let mut token = None;
+            if op.url.is_none() && !c.db_explicit && std::env::var_os("SYNAPSTORE_URL").is_none() {
+                if let Some((url, saved)) = crate::install::load_remote() {
+                    op.url = Some(url);
+                    token = saved;
+                }
+            }
+            super::agent::execute(op, token, || open(&c))?
+        }
+        Command::Install(opts) => super::setup::install(&c, opts)?,
+        Command::Skill => out!("{}", crate::install::SKILL.trim_end()),
         Command::Token(cmd) => token(&c, cmd)?,
         Command::Stats { detailed } => json(&open(&c)?.stats(*detailed).map_err(|e| e.to_string())?)?,
         Command::Dump { vectors } => {

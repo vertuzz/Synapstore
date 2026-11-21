@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 fn vector_schema(what: &str) -> Value {
     json!({"type": "array", "items": {"type": "number"},
-        "description": format!("{what}. Optional: when omitted SynapStore uses its built-in lexical embedder. \
+        "description": format!("{what}. Optional: when omitted the store embeds the text with its own embedder. \
             A store is pinned to one embedding space (dimension + source) by its first write.")})
 }
 

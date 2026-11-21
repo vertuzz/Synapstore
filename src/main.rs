@@ -6,13 +6,17 @@ use synapstore::cli;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match cli::parse(&args).and_then(cli::run::run) {
+    let parsed = match cli::parse(&args) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("synapstore: {e}\nRun `synapstore --help` for usage.");
+            return ExitCode::from(2);
+        }
+    };
+    match cli::run::run(parsed) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("synapstore: {e}");
-            if !e.starts_with("cannot ") && !e.starts_with("no token") {
-                eprintln!("Run `synapstore --help` for usage.");
-            }
             ExitCode::FAILURE
         }
     }

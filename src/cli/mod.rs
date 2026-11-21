@@ -3,61 +3,16 @@
 use crate::decay::DAY_MS;
 use crate::embed::EmbedderSpec;
 use crate::http::ServeOptions;
+use crate::install::{self, Part};
 use crate::logger::{Level, LogConfig};
 use crate::store::Config;
 use std::path::PathBuf;
 
-pub const USAGE: &str = "\
-SynapStore — single-file ACID memory for AI agents (HNSW + knowledge graph + episodic log).
-
-USAGE:
-    synapstore --mcp <DB>                 Serve MCP over stdio (local agents)
-    synapstore serve <DB> --listen <ADDR> Serve MCP over HTTP with bearer-token auth
-    synapstore token create <DB> --name <NAME> [--scope read|write|admin] [--expires-days N]
-    synapstore token list <DB>            List API tokens (secrets are never stored)
-    synapstore token revoke <DB> <ID|NAME>
-    synapstore models                     List built-in embedding models
-    synapstore pull <MODEL>               Download a model ahead of time
-    synapstore stats <DB> [--detailed]    Print store statistics as JSON
-    synapstore dump <DB> [--vectors]      Export every table as JSON lines to stdout
-    synapstore repair <DB>                Reconnect unreachable HNSW nodes
-    synapstore synth <DB> [--records N] [--seed S] [--dim D]
-                                          Load a synthetic agent-memory dataset
-    synapstore --version | --help
-
-EMBEDDINGS:
-    --embedder <SPEC>       Text embedder for a new store (remembered in the file):
-                              lexical            built-in word hashing, no model (default)
-                              minilm             English neural model, downloaded once (~90 MB)
-                              bge-small          stronger English model (~130 MB)
-                              multilingual       ~100 languages (~470 MB)
-                              hf:<owner>/<repo>  any BERT model with safetensors on the Hub
-                              <DIR>              a local model directory
-                              openai:<model>[@<base-url>]  OpenAI-compatible endpoint
-                                                 (Ollama: openai:nomic-embed-text@http://localhost:11434/v1)
-    --dim <N>               Lexical embedder dimension for a new store (default 384)
-
-HTTP SERVER (serve --listen):
-    --listen <ADDR>         Address to bind, e.g. 127.0.0.1:8765 or 0.0.0.0:8765
-    --allow-origin <ORIGIN> Allow browser requests from ORIGIN (repeatable)
-    --threads <N>           Worker threads (default 16)
-    --max-body-mb <N>       Request size limit (default 8)
-    --trust-proxy           Use X-Forwarded-For for the client address (behind a proxy)
-    --no-auth               Disable token auth (refused unless bound to 127.0.0.1/::1)
-
-OPTIONS:
-    --log <FILE>            Log file (default for servers: <DB>.log)
-    --no-log                Disable file logging
-    --log-level <LEVEL>     error | warn | info | debug (default info)
-    --log-max-mb <N>        Rotate after N MiB (default 10)
-    --log-keep <N>          Rotated files to keep (default 5)
-    --ef-search <N>         HNSW search beam width (default 64)
-    --m <N>                 HNSW links per node, fixed at creation (default 16)
-    --ef-construction <N>   HNSW build beam width, fixed at creation (default 100)
-    --half-life-days <X>    Time-decay half-life (default 30)
-    --no-decay              Disable time-decay
-    --cache-mb <N>          redb page cache (default 256)
-";
+pub mod agent;
+mod setup;
+mod usage;
+pub mod view;
+pub use usage::USAGE;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenCmd {
@@ -77,6 +32,9 @@ pub enum Command {
     Dump { vectors: bool },
     Synth { records: usize, seed: u64 },
     Repair,
+    Agent(agent::Op),
+    Install(install::Options),
+    Skill,
     Help,
     Version,
 }
@@ -84,7 +42,10 @@ pub enum Command {
 #[derive(Debug, Clone)]
 pub struct Cli {
     pub command: Command,
+    /// The store: `--db`, a positional path, `$SYNAPSTORE_DB` or `~/.synapstore/memory.redb`.
     pub db: Option<PathBuf>,
+    /// The store path came from the command line (not a default).
+    pub db_explicit: bool,
     pub config: Config,
     pub log_disabled: bool,
 }
@@ -109,11 +70,14 @@ struct Flags {
     expires_days: Option<u64>,
     serve: ServeOptions,
     listen: bool,
+    agent: agent::AgentFlags,
+    install: install::Options,
 }
 
 /// Parse `args` (without the program name). Pure.
 pub fn parse(args: &[String]) -> Result<Cli, String> {
-    let mut cli = Cli { command: Command::Help, db: None, config: Config::default(), log_disabled: false };
+    let mut cli =
+        Cli { command: Command::Help, db: None, db_explicit: false, config: Config::default(), log_disabled: false };
     let mut verb: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
     let mut f = Flags::default();
@@ -122,10 +86,13 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
     let (mut max_mb, mut keep) = (10u64, 5usize);
     let mut it = args.iter();
     while let Some(a) = it.next() {
+        let g = &mut f.agent;
         match a.as_str() {
-            "-h" | "--help" | "help" => return Ok(Cli { command: Command::Help, ..cli }),
+            "-h" | "--help" => return Ok(Cli { command: Command::Help, ..cli }),
+            "help" if verb.is_none() => return Ok(Cli { command: Command::Help, ..cli }),
             "-V" | "--version" => return Ok(Cli { command: Command::Version, ..cli }),
             "--mcp" if verb.is_none() => verb = Some("mcp".into()),
+            "--db" => cli.db = Some(PathBuf::from(value(&mut it, a)?)),
             "--detailed" => f.detailed = true,
             "--vectors" => f.vectors = true,
             "--records" => f.records = Some(num(&mut it, a)?),
@@ -133,6 +100,32 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             "--name" => f.name = Some(value(&mut it, a)?.clone()),
             "--scope" => f.scope = Some(value(&mut it, a)?.clone()),
             "--expires-days" => f.expires_days = Some(num::<u64>(&mut it, a)?.max(1)),
+            "--fact" => g.facts.push(value(&mut it, a)?.clone()),
+            "--tag" => g.tags.push(value(&mut it, a)?.clone()),
+            "--source" => g.source = Some(value(&mut it, a)?.clone()),
+            "--kind" => g.kind = Some(value(&mut it, a)?.clone()),
+            "-k" | "--top-k" => g.top_k = Some(num(&mut it, a)?),
+            "--limit" => g.limit = Some(num(&mut it, a)?),
+            "--depth" => g.depth = Some(num(&mut it, a)?),
+            "--max-age" => g.max_age = Some(value(&mut it, a)?.clone()),
+            "--subject" => g.subject = Some(value(&mut it, a)?.clone()),
+            "--predicate" => g.predicate = Some(value(&mut it, a)?.clone()),
+            "--object" => g.object = Some(value(&mut it, a)?.clone()),
+            "--json" => g.json = true,
+            "--url" => g.url = Some(value(&mut it, a)?.clone()),
+            "--client" | "--clients" => {
+                f.install
+                    .clients
+                    .extend(value(&mut it, a)?.split(',').map(|c| c.trim().to_string()).filter(|c| !c.is_empty()));
+            }
+            "--only" => {
+                f.install.only = Some(match value(&mut it, a)?.as_str() {
+                    "mcp" => Part::Mcp,
+                    "skill" | "skills" => Part::Skill,
+                    o => return Err(format!("--only: expected `mcp` or `skill`, got `{o}`")),
+                })
+            }
+            "--dry-run" => f.install.dry_run = true,
             "--listen" => {
                 f.serve.listen = value(&mut it, a)?.clone();
                 f.listen = true;
@@ -168,25 +161,30 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             "--no-decay" => cli.config.decay.enabled = false,
             "--dim" => cli.config.builtin_dim = num::<usize>(&mut it, a)?.clamp(1, 65_536),
             "--cache-mb" => cli.config.cache_bytes = num::<usize>(&mut it, a)?.max(1) * 1024 * 1024,
+            "-" => positional.push("-".into()),
             s if s.starts_with('-') => return Err(format!("unknown option `{s}`")),
             s if verb.is_none() => verb = Some(s.to_string()),
             s => positional.push(s.to_string()),
         }
     }
+    let n = positional.len();
     let mut pos = positional.into_iter();
-    let mut take_db = |pos: &mut std::vec::IntoIter<String>| -> Result<(), String> {
-        cli.db = Some(PathBuf::from(pos.next().ok_or("missing database path")?));
-        Ok(())
+    // An optional leading store path: taken when more positionals than `args` remain.
+    let mut db_if = |pos: &mut std::vec::IntoIter<String>, n: usize, args: usize| {
+        if n > args {
+            cli.db = cli.db.take().or_else(|| pos.next().map(PathBuf::from));
+        }
     };
     let command = match verb.as_deref() {
         None => Command::Help,
         Some("mcp" | "serve") => {
-            take_db(&mut pos)?;
+            db_if(&mut pos, n, 0);
             if f.listen { Command::Http(f.serve) } else { Command::Mcp }
         }
         Some("token") => {
             let sub = pos.next().ok_or("token needs a subcommand: create, list or revoke")?;
-            take_db(&mut pos)?;
+            let wants = usize::from(sub == "revoke");
+            db_if(&mut pos, n - 1, wants);
             Command::Token(match sub.as_str() {
                 "create" => TokenCmd::Create {
                     name: f.name.ok_or("token create needs --name")?,
@@ -199,9 +197,16 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             })
         }
         Some("models") => Command::Models,
+        Some("skill") => Command::Skill,
         Some("pull") => Command::Pull { model: pos.next().ok_or("pull needs a model name")? },
+        Some(v @ ("install" | "uninstall")) => {
+            let mut o = f.install;
+            o.uninstall = v == "uninstall";
+            o.url = f.agent.url.clone();
+            Command::Install(o)
+        }
         Some(v @ ("stats" | "dump" | "repair" | "synth")) => {
-            take_db(&mut pos)?;
+            db_if(&mut pos, n, 0);
             match v {
                 "stats" => Command::Stats { detailed: f.detailed },
                 "dump" => Command::Dump { vectors: f.vectors },
@@ -209,15 +214,17 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
                 _ => Command::Synth { records: f.records.unwrap_or(20_000), seed: f.seed.unwrap_or(42) },
             }
         }
+        Some(v) if agent::VERBS.contains(&v) => Command::Agent(agent::build(v, pos.by_ref().collect(), f.agent)?),
         Some(other) => return Err(format!("unknown command `{other}`")),
     };
     if let Some(extra) = pos.next() {
         return Err(format!("unexpected argument `{extra}`"));
     }
     cli.command = command;
+    cli.db_explicit = cli.db.is_some();
     let server = matches!(cli.command, Command::Mcp | Command::Http(_));
     if server && !cli.log_disabled && log.is_none() {
-        let mut p = cli.db.clone().unwrap_or_default().into_os_string();
+        let mut p = cli.db.clone().unwrap_or_else(crate::paths::default_db).into_os_string();
         p.push(".log");
         log = Some(LogConfig::new(p));
     }

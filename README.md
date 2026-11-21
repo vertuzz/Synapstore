@@ -21,20 +21,64 @@ Everything else is implemented in this crate and has no C bindings:
 
 ## Install
 
+One command installs the binary and connects it to every agent it finds on the machine:
+
 ```sh
-cargo install --git https://github.com/vertuzz/Synapstore
-# or from a checkout
-cargo install --path .
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/vertuzz/synapstore/main/install.sh | sh
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/vertuzz/synapstore/main/install.ps1 | iex
 ```
+
+The script downloads a prebuilt binary from the latest GitHub release and verifies its SHA-256; without a release
+for the platform it builds with `cargo`. It then runs `synapstore install`, which:
+
+- creates the store `~/.synapstore/memory.redb`;
+- registers the MCP server with each agent found: Claude Code, Codex CLI, OpenCode, Gemini CLI, Cursor,
+  VS Code (Copilot), Windsurf and Claude Desktop;
+- installs the memory skill (`SKILL.md`, the [Agent Skills](https://agentskills.io) format), which tells the agent
+  when to recall and what to memorize. pi has no MCP, so it gets the skill, and the skill drives the
+  `synapstore` CLI instead.
+
+Pass options after `sh -s --`, for example `| sh -s -- --embedder multilingual --client claude-code,codex`.
+
+| You want | Command |
+|---|---|
+| Everything for the agents found | `synapstore install` |
+| Only some agents | `synapstore install --client claude-code,codex,pi` (or `--client all`) |
+| Only the MCP server / only the skill | `synapstore install --only mcp` / `--only skill` |
+| A neural embedder for the store | `synapstore install --embedder minilm` |
+| A shared server instead of a local file | `SYNAPSTORE_TOKEN=syn_… synapstore install --url https://memory.example.com` |
+| Preview the changes | `synapstore install --dry-run` |
+| Undo (keeps the memory) | `synapstore uninstall` |
+
+Config edits keep your formatting and comments, and the original file is saved next to it as
+`<file>.synapstore.bak`.
+
+You can also install the binary yourself (`cargo install --git https://github.com/vertuzz/synapstore`) and use
+each agent's own mechanism:
+
+| Agent | Command |
+|---|---|
+| Any agent with skills (Claude Code, Codex, OpenCode, Cursor, pi, …) | `npx skills add vertuzz/synapstore` |
+| Claude Code plugin (MCP server + skill) | `/plugin marketplace add vertuzz/synapstore`, then `/plugin install synapstore@synapstore` |
+| Gemini CLI extension | `gemini extensions install https://github.com/vertuzz/synapstore` |
+| Claude Code, MCP only | `claude mcp add --scope user synapstore -- synapstore mcp` |
+| Codex, MCP only | `codex mcp add synapstore -- synapstore mcp` |
+| Anything else | `synapstore skill` prints the skill; paste it into `AGENTS.md` or your agent's rules |
+
+Several agents can use the same store at once: each one starts its own `synapstore mcp` process, and redb's
+multi-process mode serializes their writes.
 
 ## Quick start
 
 ```sh
-# Local agent (Claude Code, Cursor, …) over stdio, with a neural embedder:
-claude mcp add synapstore -- synapstore --mcp ~/.agent/memory.redb --embedder minilm
+synapstore remember "The user deploys with make release, never from CI." --fact "user|deploys with|make release"
+synapstore recall "how do we deploy?"
+synapstore graph user
 
-# Or expose one memory to several machines over HTTP:
-synapstore serve ~/.agent/memory.redb --listen 127.0.0.1:8765 --embedder multilingual
+# Expose one memory to several machines over HTTP:
+synapstore serve --listen 127.0.0.1:8765 --embedder multilingual
 ```
 
 ## Embeddings
@@ -168,15 +212,27 @@ only protocol traffic.
 
 ## CLI
 
+The memory commands are the same tool calls, with compact text output (`--json` for raw results). They use the
+default store, `--db <FILE>` or `$SYNAPSTORE_DB`; with `--url` / `$SYNAPSTORE_URL` (token in
+`$SYNAPSTORE_TOKEN`) they call a remote server instead.
+
 ```
-synapstore --mcp <DB>                   Serve MCP over stdio
-synapstore serve <DB> --listen <ADDR>   Serve MCP over HTTP with token auth
-synapstore token create|list|revoke     Manage API tokens
-synapstore models | pull <MODEL>        List / download embedding models
-synapstore stats <DB> [--detailed]      Statistics as JSON
-synapstore dump <DB> [--vectors]        Export every table as JSON lines (whitebox export)
-synapstore repair <DB>                  Reconnect unreachable HNSW nodes
-synapstore synth <DB> [--records N]     Load a synthetic agent-memory dataset
+synapstore recall <QUERY> [-k N] [--max-age 7d] [--tag T]
+synapstore remember <TEXT|-> [--fact "s|p|o"]... [--tag T]... [--source S]
+synapstore graph <ENTITY> [--depth N]          synapstore facts [--subject S] [--predicate P] [--object O]
+synapstore fact add|rm <S> <P> <O>             synapstore forget <ID>...
+synapstore log <TEXT|-> [--kind K]             synapstore events [--limit N] [--kind K]
+synapstore explain <ID> [QUERY]                synapstore call <TOOL> [JSON]
+
+synapstore install | uninstall | skill         Connect agents (see Install)
+synapstore mcp [DB]                            Serve MCP over stdio
+synapstore serve [DB] --listen <ADDR>          Serve MCP over HTTP with token auth
+synapstore token create|list|revoke            Manage API tokens
+synapstore models | pull <MODEL>               List / download embedding models
+synapstore stats [DB] [--detailed]             Statistics as JSON
+synapstore dump [DB] [--vectors]               Export every table as JSON lines (whitebox export)
+synapstore repair [DB]                         Reconnect unreachable HNSW nodes
+synapstore synth [DB] [--records N]            Load a synthetic agent-memory dataset
 ```
 
 Run `synapstore --help` for all flags. They include `--embedder`, `--allow-origin`, `--trust-proxy`,

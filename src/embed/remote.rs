@@ -109,6 +109,20 @@ pub fn http_post(url: &str, headers: &[(&str, String)], body: &[u8], timeout: Du
     Ok((status, out))
 }
 
+/// POST a JSON body with an optional bearer token: plain `http://` in-process,
+/// `https://` through curl. Returns (status, body).
+pub fn post_json(url: &str, bearer: Option<&str>, body: &str) -> Result<(u16, Vec<u8>)> {
+    if url.starts_with("http://") {
+        let headers: Vec<(&str, String)> =
+            bearer.map(|t| ("Authorization", format!("Bearer {t}"))).into_iter().collect();
+        http_post(url, &headers, body.as_bytes(), Duration::from_secs(120))
+    } else if url.starts_with("https://") {
+        curl_post(url, bearer, body)
+    } else {
+        Err(err(format!("`{url}` is not an http(s) URL")))
+    }
+}
+
 fn curl_post(url: &str, key: Option<&str>, body: &str) -> Result<(u16, Vec<u8>)> {
     let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     let mut cfg = format!("url = \"{}\"\nheader = \"Content-Type: application/json\"\n", esc(url));

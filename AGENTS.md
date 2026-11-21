@@ -16,6 +16,10 @@
   - `src/embed/` — the `Embedder` trait; `lexical`, `bert/` (pure-Rust BERT and its tokenizers), `fetch.rs`
     (model registry and download), `remote.rs` (OpenAI-compatible endpoints).
   - `src/http/` + `src/auth/` — Streamable HTTP transport and bearer-token authentication.
+  - `src/cli/` — argument parsing, the memory commands (`agent.rs`, `view.rs`) and `install` (`setup.rs`).
+  - `src/install/` — per-agent config locations (`clients.rs`) and format-preserving JSONC / TOML edits.
+  - `skills/synapstore/SKILL.md` — the agent skill; embedded in the binary, also used by the Claude Code plugin
+    (`.claude-plugin/`), the Gemini extension and `npx skills`. Keep the CLI examples in it working.
   - `src/graph/` — triple store writer and BFS reader.
   - `src/mcp/` — JSON-RPC framing, tool schemas (`tools.rs`), handlers.
   - `src/synth/` — deterministic synthetic world + correctness checks used by tests and benches.
@@ -32,5 +36,7 @@
 - Pass `vector` from your embedding model if you have one. Otherwise the store's embedder is used: `lexical`
   by default, or a neural model chosen with `--embedder` when the store was created. Do not mix your own
   vectors and text queries in one store.
+- No MCP client? The `synapstore` CLI does the same: `synapstore recall "…"`, `synapstore remember "…" --fact
+  "s|p|o"`, `synapstore graph <entity>`.
 - Over HTTP, your token's scope decides which tools you see. A `forbidden` error means you need a token with a
   wider scope; do not retry it.

@@ -1,0 +1,17 @@
+{
+  "name": "synapstore",
+  "description": "SynapStore: persistent memory for AI agents (MCP server + memory skill).",
+  "owner": {
+    "name": "vertuzz",
+    "url": "https://github.com/vertuzz/synapstore"
+  },
+  "plugins": [
+    {
+      "name": "synapstore",
+      "source": "./",
+      "description": "Long-term memory across sessions: the SynapStore MCP server and the skill that tells Claude when to recall and memorize.",
+      "category": "productivity",
+      "tags": ["memory", "mcp", "knowledge-graph"]
+    }
+  ]
+}
