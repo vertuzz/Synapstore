@@ -8,6 +8,17 @@ use crate::timefmt::rfc3339;
 use crate::{SynapStore, http, synth};
 use std::io::{self, BufWriter, Write};
 
+/// `println!` that exits quietly when stdout is closed (`synapstore … | head`).
+macro_rules! out {
+    ($($t:tt)*) => {{
+        if let Err(e) = writeln!(io::stdout(), $($t)*) {
+            if e.kind() == io::ErrorKind::BrokenPipe {
+                std::process::exit(0);
+            }
+        }
+    }};
+}
+
 fn open(c: &Cli) -> Result<SynapStore, String> {
     let db = c.db.clone().unwrap_or_default();
     let mut cfg = c.config.clone();
@@ -16,7 +27,7 @@ fn open(c: &Cli) -> Result<SynapStore, String> {
 }
 
 fn json<T: serde::Serialize>(v: &T) -> Result<(), String> {
-    println!("{}", serde_json::to_string_pretty(v).map_err(|e| e.to_string())?);
+    out!("{}", serde_json::to_string_pretty(v).map_err(|e| e.to_string())?);
     Ok(())
 }
 
@@ -25,9 +36,9 @@ fn fmt_time(ms: Option<u64>) -> String {
 }
 
 fn print_tokens(tokens: &[TokenInfo]) {
-    println!("{:<14} {:<20} {:<6} {:<24} {:<24} LAST USED", "ID", "NAME", "SCOPE", "CREATED", "EXPIRES");
+    out!("{:<14} {:<20} {:<6} {:<24} {:<24} LAST USED", "ID", "NAME", "SCOPE", "CREATED", "EXPIRES");
     for t in tokens {
-        println!(
+        out!(
             "{:<14} {:<20} {:<6} {:<24} {:<24} {}",
             t.id,
             t.name,
@@ -72,7 +83,7 @@ fn token(c: &Cli, cmd: &TokenCmd) -> Result<(), String> {
                 info.id,
                 scope.as_str()
             );
-            println!("{secret}");
+            out!("{secret}");
         }
         TokenCmd::List => print_tokens(&store.list_tokens().map_err(|e| e.to_string())?),
         TokenCmd::Revoke { target } => {
@@ -89,26 +100,26 @@ fn token(c: &Cli, cmd: &TokenCmd) -> Result<(), String> {
 }
 
 fn models() {
-    println!("{:<10} {:<40} {:>4} {:>7}  {:<11} STATUS", "NAME", "REPOSITORY", "DIM", "SIZE", "LICENSE");
+    out!("{:<13} {:<40} {:>4} {:>7}  {:<11} STATUS", "NAME", "REPOSITORY", "DIM", "SIZE", "LICENSE");
     for m in fetch::REGISTRY {
         let cached = fetch::resolve(m.name).map(|r| r.cache_dir().join(".synapstore-complete").is_file());
         let status = if cached.unwrap_or(false) { "downloaded" } else { "not downloaded" };
-        println!("{:<10} {:<40} {:>4} {:>4} MB  {:<11} {status}", m.name, m.repo, m.dim, m.download_mb, m.license);
-        println!("{:<10} {} ({})", "", m.about, m.languages);
+        out!("{:<13} {:<40} {:>4} {:>4} MB  {:<11} {status}", m.name, m.repo, m.dim, m.download_mb, m.license);
+        out!("{:<13} {} ({})", "", m.about, m.languages);
     }
-    println!("\nCache: {}", fetch::models_dir().display());
-    println!("Also: lexical (no model), hf:<owner>/<repo>, a local directory, openai:<model>[@<url>]");
+    out!("\nCache: {}", fetch::models_dir().display());
+    out!("Also: lexical (no model), hf:<owner>/<repo>, a local directory, openai:<model>[@<url>]");
 }
 
 /// Run the command; `Err` is a message for the user.
 pub fn run(c: Cli) -> Result<(), String> {
     match &c.command {
-        Command::Help => print!("{}", super::USAGE),
-        Command::Version => println!("synapstore {}", env!("CARGO_PKG_VERSION")),
+        Command::Help => out!("{}", super::USAGE.trim_end()),
+        Command::Version => out!("synapstore {}", env!("CARGO_PKG_VERSION")),
         Command::Models => models(),
         Command::Pull { model } => {
             let e = fetch::load_model(model, &|m| eprintln!("synapstore: {m}")).map_err(|e| e.to_string())?;
-            println!("{}", crate::embed::Embedder::source(&e));
+            out!("{}", crate::embed::Embedder::source(&e));
         }
         Command::Mcp => {
             let store = open(&c)?;
@@ -122,8 +133,20 @@ pub fn run(c: Cli) -> Result<(), String> {
         Command::Dump { vectors } => {
             let store = open(&c)?;
             let mut out = BufWriter::new(io::stdout().lock());
-            store.dump(&mut out, *vectors).map_err(|e| e.to_string())?;
-            out.flush().map_err(|e| e.to_string())?;
+            // A closed pipe (`dump | head`) is not an error.
+            let quiet_on_pipe = |e: crate::Error| {
+                if e.to_string().contains("Broken pipe") {
+                    std::process::exit(0);
+                }
+                e.to_string()
+            };
+            store.dump(&mut out, *vectors).map_err(quiet_on_pipe)?;
+            if let Err(e) = out.flush() {
+                if e.kind() == io::ErrorKind::BrokenPipe {
+                    std::process::exit(0);
+                }
+                return Err(e.to_string());
+            }
         }
         Command::Repair => json(&open(&c)?.repair_index().map_err(|e| e.to_string())?)?,
         Command::Synth { records, seed } => {
