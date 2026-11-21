@@ -134,7 +134,8 @@ pub fn generate(seed: u64, dim: usize, chunks: usize, events: usize, now: u64, s
     for (i, person) in w.people.iter().enumerate() {
         let company = &w.companies[i % w.companies.len()];
         w.facts.push(fact(person, "works_at", company));
-        w.facts.push(fact(person, "lives_in", rng.pick(CITIES)));
+        let city = *rng.pick(CITIES);
+        w.facts.push(fact(person, "lives_in", city));
         w.facts.push(fact(person, "member_of", &w.projects[i % w.projects.len()]));
         let manager = &w.people[i % w.companies.len()];
         if manager != person {

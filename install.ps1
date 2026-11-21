@@ -8,6 +8,7 @@
 # SYNAPSTORE_VERSION (default latest), SYNAPSTORE_NO_SETUP=1, SYNAPSTORE_INSTALL_ARGS
 # (arguments for `synapstore install`, e.g. "--embedder minilm").
 $ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $repo = 'vertuzz/synapstore'
 $dir = if ($env:SYNAPSTORE_INSTALL_DIR) { $env:SYNAPSTORE_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'synapstore\bin' }
 $name = 'synapstore-x86_64-windows'
@@ -33,12 +34,13 @@ $bin = Join-Path $dir 'synapstore.exe'
 Write-Host "synapstore-install: installed $(& $bin --version) to $bin"
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if (-not ($userPath -split ';' | Where-Object { $_ -eq $dir })) {
-    [Environment]::SetEnvironmentVariable('Path', "$dir;$userPath", 'User')
+    $newPath = if ($userPath) { "$dir;$userPath" } else { $dir }
+    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
     Write-Host "synapstore-install: added $dir to your user PATH (open a new terminal)"
 }
 $env:Path = "$dir;$env:Path"
 
 if ($env:SYNAPSTORE_NO_SETUP -ne '1') {
-    $installArgs = if ($env:SYNAPSTORE_INSTALL_ARGS) { $env:SYNAPSTORE_INSTALL_ARGS -split ' ' } else { @() }
+    $installArgs = if ($env:SYNAPSTORE_INSTALL_ARGS) { @($env:SYNAPSTORE_INSTALL_ARGS -split '\s+' | Where-Object { $_ }) } else { @() }
     & $bin install @installArgs
 }

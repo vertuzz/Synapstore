@@ -66,7 +66,7 @@ fn flush(run: &mut Vec<String>, run_at_start: bool, out: &mut Vec<String>) {
     if run_at_start && words.first().is_some_and(|w| is_starter(w)) {
         words = &words[1..];
     }
-    if !words.is_empty() && !(words.len() == 1 && words[0].chars().count() < 2) {
+    if words.len() > 1 || words.first().is_some_and(|w| w.chars().count() >= 2) {
         let name = words.join(" ");
         if !out.iter().any(|e| e.eq_ignore_ascii_case(&name)) {
             out.push(name);
