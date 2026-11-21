@@ -158,7 +158,11 @@ tool error.
 Connect a client:
 
 ```sh
-claude mcp add --transport http synapstore https://memory.example.com/mcp \
+# All detected agents + skill + CLI (~/.synapstore/remote.json):
+SYNAPSTORE_TOKEN=syn_… synapstore install --url https://memory.example.com
+
+# Or register MCP manually in Claude Code:
+claude mcp add --scope user --transport http synapstore https://memory.example.com/mcp \
   --header "Authorization: Bearer syn_…"
 ```
 
@@ -167,6 +171,61 @@ claude mcp add --transport http synapstore https://memory.example.com/mcp \
     "type": "http", "url": "https://memory.example.com/mcp",
     "headers": { "Authorization": "Bearer syn_…" } } } }
 ```
+
+### Self-hosting behind HTTPS
+
+To host a single shared store on a Linux server with a domain pointing to it:
+
+1. **Install the binary** (release tarball from GitHub Releases or `cargo install`) to `/usr/local/bin/synapstore`,
+   create a dedicated system user and a private data directory:
+
+   ```sh
+   sudo useradd --system --home-dir /var/lib/synapstore --shell /usr/sbin/nologin --user-group synapstore
+   sudo install -d -m 0700 -o synapstore -g synapstore /var/lib/synapstore /var/lib/synapstore/models
+   ```
+
+2. **Pre-download the embedder and create your first token** before starting the service (pass `SYNAPSTORE_MODELS`
+   so `token create` and `serve` share the same cache and no throwaway `default` token is generated at startup):
+
+   ```sh
+   sudo -u synapstore SYNAPSTORE_MODELS=/var/lib/synapstore/models \
+     /usr/local/bin/synapstore pull multilingual
+
+   sudo -u synapstore SYNAPSTORE_MODELS=/var/lib/synapstore/models \
+     /usr/local/bin/synapstore token create /var/lib/synapstore/memory.redb \
+     --embedder multilingual --name laptop --scope write
+   ```
+
+   Save the printed `syn_…` secret once (only its SHA-256 hash is stored in `memory.redb`). Issue a separate token
+   per device or agent so you can revoke any of them independently.
+
+3. **Start the systemd service and TLS reverse proxy.** Copy [`deploy/synapstore.service`](deploy/synapstore.service)
+   to `/etc/systemd/system/` (it binds `127.0.0.1:8765` with `--trust-proxy`) and add the block from
+   [`deploy/Caddyfile`](deploy/Caddyfile) with your domain to `/etc/caddy/Caddyfile`:
+
+   ```sh
+   sudo cp deploy/synapstore.service /etc/systemd/system/
+   sudo systemctl daemon-reload && sudo systemctl enable --now synapstore
+   sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+   ```
+
+4. **Verify** from your workstation:
+
+   ```sh
+   curl -fsS https://memory.example.com/healthz                          # {"status":"ok"}
+   curl -i -X POST https://memory.example.com/mcp \
+     -H "Content-Type: application/json" -d '{}'                         # 401 Unauthorized
+   ```
+
+5. **Use it** from any agent or the CLI:
+
+   ```sh
+   SYNAPSTORE_TOKEN=syn_… synapstore install --url https://memory.example.com
+   synapstore remember "Deployed SynapStore" && synapstore recall deployed
+   ```
+
+   For scripts or CI without `synapstore install`, set `SYNAPSTORE_URL=https://memory.example.com/mcp` and
+   `SYNAPSTORE_TOKEN=syn_…` (for example in a git-ignored `.env` file).
 
 ### Security model
 
@@ -187,9 +246,9 @@ claude mcp add --transport http synapstore https://memory.example.com/mcp \
   - workers: a bounded pool, with `503` when it is saturated
 - **No-auth mode:** `--no-auth` is refused unless the server binds to a loopback address.
 - **TLS** is not built in, because it would break the dependency budget. On a public address, put a TLS reverse
-  proxy in front of the server. [`deploy/Caddyfile`](deploy/Caddyfile) does it in four lines with automatic
-  Let's Encrypt certificates, and [`deploy/synapstore.service`](deploy/synapstore.service) is a hardened
-  systemd unit for it.
+  proxy in front of the server. [`deploy/Caddyfile`](deploy/Caddyfile) configures automatic Let's Encrypt
+  certificates and proxies only `/mcp*` and `/healthz`, and [`deploy/synapstore.service`](deploy/synapstore.service)
+  is a hardened systemd unit for it.
 
 ## MCP tools
 

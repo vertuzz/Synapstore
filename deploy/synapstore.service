@@ -1,8 +1,13 @@
 # systemd unit for a public SynapStore behind a TLS proxy (see Caddyfile).
-#   sudo useradd --system --home /var/lib/synapstore synapstore
-#   sudo install -m 0755 ~/.cargo/bin/synapstore /usr/local/bin/
-#   sudo cp synapstore.service /etc/systemd/system/ && sudo systemctl enable --now synapstore
-#   sudo -u synapstore synapstore token create /var/lib/synapstore/memory.redb --name laptop
+#
+#   sudo useradd --system --home-dir /var/lib/synapstore --shell /usr/sbin/nologin --user-group synapstore
+#   sudo install -d -m 0700 -o synapstore -g synapstore /var/lib/synapstore /var/lib/synapstore/models
+#   sudo install -m 0755 synapstore /usr/local/bin/synapstore
+#   sudo -u synapstore SYNAPSTORE_MODELS=/var/lib/synapstore/models \
+#     /usr/local/bin/synapstore pull multilingual
+#   sudo -u synapstore SYNAPSTORE_MODELS=/var/lib/synapstore/models \
+#     /usr/local/bin/synapstore token create /var/lib/synapstore/memory.redb --embedder multilingual --name laptop
+#   sudo cp deploy/synapstore.service /etc/systemd/system/ && sudo systemctl enable --now synapstore
 [Unit]
 Description=SynapStore MCP memory server
 After=network-online.target
@@ -12,13 +17,24 @@ Wants=network-online.target
 User=synapstore
 Group=synapstore
 Environment=SYNAPSTORE_MODELS=/var/lib/synapstore/models
+Environment=HF_HUB_OFFLINE=1
 ExecStart=/usr/local/bin/synapstore serve /var/lib/synapstore/memory.redb --listen 127.0.0.1:8765 --trust-proxy --embedder multilingual
 Restart=on-failure
+RestartSec=3
 StateDirectory=synapstore
+StateDirectoryMode=0700
+UMask=0077
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 ReadWritePaths=/var/lib/synapstore
 
 [Install]

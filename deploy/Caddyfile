@@ -5,7 +5,26 @@
 #   caddy run --config /etc/caddy/Caddyfile
 memory.example.com {
 	encode zstd gzip
-	reverse_proxy /mcp* 127.0.0.1:8765
-	reverse_proxy /healthz 127.0.0.1:8765
-	respond 404
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# `handle` blocks are required so the fallback 404 does not run before
+	# `reverse_proxy` (Caddy orders `respond` ahead of `reverse_proxy`).
+	handle /mcp* {
+		reverse_proxy 127.0.0.1:8765
+	}
+
+	handle /healthz {
+		reverse_proxy 127.0.0.1:8765
+	}
+
+	handle {
+		respond 404
+	}
 }

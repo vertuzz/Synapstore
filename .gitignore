@@ -4,3 +4,5 @@ target/
 bench/results/
 __pycache__/
 .models/
+.env
+.env.*
