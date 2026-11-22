@@ -15,6 +15,8 @@
 //! | `meta`         | &str                  | u64                           |
 //! | `meta_str`     | &str                  | &str                          |
 //! | `auth_tokens`  | SHA-256 of the secret | rkyv [`ApiToken`](crate::model::ApiToken) |
+//! | `usage_log`    | (ts_ms, id)           | JSON [`UsageRecord`](crate::store::usage::UsageRecord) |
+//! | `recall_stats` | chunk id              | (recall count, last recall ms) |
 
 use crate::error::Result;
 use redb::{ReadableTable, TableDefinition, WriteTransaction};
@@ -35,6 +37,10 @@ pub const EPISODES: TableDefinition<Pair, &[u8]> = TableDefinition::new("episode
 pub const META: TableDefinition<&str, u64> = TableDefinition::new("meta");
 pub const META_STR: TableDefinition<&str, &str> = TableDefinition::new("meta_str");
 pub const AUTH_TOKENS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("auth_tokens");
+/// Opt-in tool-call log (`--usage-log`): (ts, id) → JSON record. Bounded.
+pub const USAGE_LOG: TableDefinition<Pair, &[u8]> = TableDefinition::new("usage_log");
+/// Per-memory recall counters: chunk id → (times returned by recall, last ms).
+pub const RECALL_STATS: TableDefinition<u64, Pair> = TableDefinition::new("recall_stats");
 
 /// Keys of the `meta` / `meta_str` tables.
 pub mod keys {
@@ -68,6 +74,8 @@ pub fn create_all(txn: &WriteTransaction) -> Result<()> {
     txn.open_table(EPISODES)?;
     txn.open_table(META_STR)?;
     txn.open_table(AUTH_TOKENS)?;
+    txn.open_table(USAGE_LOG)?;
+    txn.open_table(RECALL_STATS)?;
     let mut meta = txn.open_table(META)?;
     if meta.get(keys::SCHEMA_VERSION)?.is_none() {
         meta.insert(keys::SCHEMA_VERSION, SCHEMA_VERSION)?;

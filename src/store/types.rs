@@ -147,6 +147,9 @@ pub struct RecallOutcome {
     pub visited: u64,
     pub ef: usize,
     pub embedding: String,
+    /// Set when the answer is degraded (e.g. the embedding endpoint is down).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

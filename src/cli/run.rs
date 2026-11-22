@@ -24,7 +24,7 @@ pub fn print(text: &str) {
     out!("{text}");
 }
 
-fn open(c: &Cli) -> Result<SynapStore, String> {
+pub(super) fn open(c: &Cli) -> Result<SynapStore, String> {
     let db = c.db.clone().unwrap_or_else(crate::paths::default_db);
     if let Some(dir) = db.parent().filter(|d| !d.as_os_str().is_empty() && !d.exists()) {
         std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
@@ -34,7 +34,7 @@ fn open(c: &Cli) -> Result<SynapStore, String> {
     SynapStore::open(&db, cfg).map_err(|e| format!("cannot open {}: {e}", db.display()))
 }
 
-fn json<T: serde::Serialize>(v: &T) -> Result<(), String> {
+pub(super) fn json<T: serde::Serialize>(v: &T) -> Result<(), String> {
     out!("{}", serde_json::to_string_pretty(v).map_err(|e| e.to_string())?);
     Ok(())
 }
@@ -172,6 +172,9 @@ pub fn run(c: Cli) -> Result<(), String> {
             }
         }
         Command::Repair => json(&open(&c)?.repair_index().map_err(|e| e.to_string())?)?,
+        Command::Reindex { src, dst, merge } => super::maint::reindex(&c, src, dst, *merge)?,
+        Command::Eval { queries, top_k } => super::maint::eval(&c, queries, *top_k)?,
+        Command::Usage { limit } => json(&open(&c)?.usage(*limit).map_err(|e| e.to_string())?)?,
         Command::Synth { records, seed } => {
             let store = open(&c)?;
             let spec = synth::Spec::scaled(*records, *seed, c.config.builtin_dim.min(256));

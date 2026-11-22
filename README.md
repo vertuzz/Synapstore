@@ -110,6 +110,7 @@ it with a different embedder is refused.
 | `hf:<owner>/<repo>[@rev]` | Any BERT-architecture model on the Hub with `model.safetensors` | varies | |
 | `<directory>` | A local model directory (`config.json`, `model.safetensors`, `tokenizer.json` or `vocab.txt`) | none | |
 | `openai:<model>[@<base-url>]` | Any OpenAI-compatible `/v1/embeddings` endpoint | none | that model's |
+| `openrouter:<model>` | Any embedding model on OpenRouter, zero-data-retention routing | none | that model's |
 
 **Built-in models** run on the CPU inside the `synapstore` process, in pure Rust:
 
@@ -137,6 +138,34 @@ Speed on 4 vCPUs (AVX2) with `minilm`:
 embeddings API. llama.cpp, vLLM, LM Studio, TEI and OpenAI itself work the same way:
 `openai:text-embedding-3-small` uses `https://api.openai.com/v1`. The API key is read from
 `SYNAPSTORE_EMBED_API_KEY`, or from `OPENAI_API_KEY`.
+
+**OpenRouter.** `openrouter:<model>` uses `https://openrouter.ai/api/v1` with the key from `OPENROUTER_API_KEY`.
+Every request asks OpenRouter to route only to zero-data-retention providers that do not train on the data
+(`"provider": {"zdr": true, "data_collection": "deny"}`). On a personal bilingual (Russian/English) memory of
+~200 notes and 85 test questions, `openrouter:perplexity/pplx-embed-v1-4b` (open weights, MIT) answered 93% of
+questions with the right memory first and 98% within the top five, against 64% / 85% for `multilingual`; it
+was also the best of the models tried at cross-language questions (96% top-five).
+
+Remote embedders behave like this:
+
+- **Chunking.** Their context windows hold whole memories, so a memory is cut only above 8,000 characters and
+  `recall` returns it in one piece. Local models keep 1,200-character chunks.
+- **Retries.** Network errors and HTTP 408/429/5xx are retried with backoff.
+- **Offline start.** A store that already records its dimension opens without contacting the endpoint, so the
+  server, `stats`, `dump` and backups work without network.
+- **Endpoint down.** `recall` falls back to a word-overlap scan and says so (`"embedding": "lexical-fallback"`
+  plus a `warning`); `memorize` fails with `embedding_unavailable`, and the agent can retry.
+
+**Switching embedders.** A store's vectors cannot be converted in place. `synapstore reindex OLD NEW
+--embedder <SPEC>` builds a new file from an old one, which is only read:
+
+- **Memories** are re-embedded. Tags, entities, timestamps and counters are kept, and memories an older
+  version split into several chunks are joined back together when the split is unambiguous.
+- **Facts** keep their timestamps and their (remapped) source memory.
+- **Episodes and API tokens** are copied as they are.
+- **Junk entities** that old heuristics extracted from stop words, months or emphasis are dropped.
+
+Compare the two files with `synapstore eval <DB> --queries questions.tsv`, then swap them.
 
 **Your own vectors.** Agents can always pass `vector` to `memorize` and `recall`. Such a store is pinned to the
 `external` space.
@@ -291,6 +320,18 @@ To host a single shared store on a Linux server with a domain pointing to it:
 When a tool fails, it returns `isError: true` with `structuredContent.error = {kind, message}`, and the server
 keeps running. The stdio server logs to `<db>.log` (logfmt, rotated at 10 MiB, 5 files kept), so stdout carries
 only protocol traffic.
+
+Every tool call is logged as a `tool` line with the caller (`client=<token name>/<clientInfo.name>`), and for
+`recall` the number of hits, the top similarity and the embedding used. With `serve --usage-log` the calls are
+also kept in the store (last 20,000). `synapstore usage` then reports:
+
+- calls per client and tool;
+- the weakest recall queries (lowest top similarity), which are candidates for missing memories;
+- the most recalled memories, and memories that were never recalled.
+
+**Decay by tag.** By default every memory fades with age. `--decay-tags status,plan,todo,news,snapshot*` limits
+decay to memories carrying one of those tags (`x*` matches by prefix). Durable knowledge, such as people,
+contracts and decisions, then ranks by similarity alone however old it is.
 
 ## CLI
 

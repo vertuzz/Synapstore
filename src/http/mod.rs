@@ -35,6 +35,8 @@ pub struct ServeOptions {
     pub no_auth: bool,
     /// Take the client address from `X-Forwarded-For` (behind a proxy).
     pub trust_proxy: bool,
+    /// Record tool calls in the store's usage log (`synapstore usage`).
+    pub usage_log: bool,
 }
 
 impl Default for ServeOptions {
@@ -46,6 +48,7 @@ impl Default for ServeOptions {
             max_body: 8 << 20,
             no_auth: false,
             trust_proxy: false,
+            usage_log: false,
         }
     }
 }

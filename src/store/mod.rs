@@ -4,6 +4,8 @@
 
 pub mod apply;
 pub mod explain;
+pub mod fallback;
+pub mod import;
 pub mod prepare;
 pub mod reads;
 pub mod recall;
@@ -11,6 +13,7 @@ pub mod space;
 pub mod stats;
 pub mod tokens;
 pub mod types;
+pub mod usage;
 pub mod writer;
 
 pub use types::*;
@@ -45,6 +48,8 @@ pub struct Config {
     /// Dimension of the lexical embedder for a fresh store.
     pub builtin_dim: usize,
     pub max_chunk_chars: usize,
+    /// Only memories with one of these tags decay (`*` = prefix); empty = all.
+    pub decay_tags: Vec<String>,
     pub log: Option<LogConfig>,
 }
 
@@ -59,6 +64,7 @@ impl Default for Config {
             embedder_progress: false,
             builtin_dim: BUILTIN_DIM,
             max_chunk_chars: 1200,
+            decay_tags: Vec::new(),
             log: None,
         }
     }

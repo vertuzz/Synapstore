@@ -9,6 +9,7 @@ use crate::store::Config;
 use std::path::PathBuf;
 
 pub mod agent;
+mod maint;
 mod setup;
 mod usage;
 pub mod view;
@@ -32,6 +33,9 @@ pub enum Command {
     Dump { vectors: bool },
     Synth { records: usize, seed: u64 },
     Repair,
+    Reindex { src: PathBuf, dst: PathBuf, merge: bool },
+    Eval { queries: PathBuf, top_k: usize },
+    Usage { limit: usize },
     Agent(agent::Op),
     Install(install::Options),
     Skill,
@@ -72,6 +76,8 @@ struct Flags {
     listen: bool,
     agent: agent::AgentFlags,
     install: install::Options,
+    queries: Option<String>,
+    no_merge: bool,
 }
 
 /// Parse `args` (without the program name). Pure.
@@ -127,6 +133,12 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
                 })
             }
             "--dry-run" => f.install.dry_run = true,
+            "--queries" => f.queries = Some(value(&mut it, a)?.clone()),
+            "--no-merge" => f.no_merge = true,
+            "--decay-tags" => {
+                let v = value(&mut it, a)?;
+                cli.config.decay_tags = v.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
+            }
             "--listen" => {
                 f.serve.listen = value(&mut it, a)?.clone();
                 f.listen = true;
@@ -135,6 +147,7 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             "--threads" => f.serve.threads = num::<usize>(&mut it, a)?.clamp(1, 1024),
             "--no-auth" => f.serve.no_auth = true,
             "--trust-proxy" => f.serve.trust_proxy = true,
+            "--usage-log" => f.serve.usage_log = true,
             "--max-body-mb" => f.serve.max_body = num::<usize>(&mut it, a)?.clamp(1, 1024) << 20,
             "--embedder" => cli.config.embedder = EmbedderSpec::parse(value(&mut it, a)?).map_err(|e| e.to_string())?,
             "--log" => log = Some(LogConfig::new(value(&mut it, a)?)),
@@ -205,6 +218,20 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             o.uninstall = v == "uninstall";
             o.url = f.agent.url.clone();
             Command::Install(o)
+        }
+        Some("reindex") => {
+            let src = pos.next().ok_or("reindex needs SRC and DST store paths")?;
+            let dst = pos.next().ok_or("reindex needs SRC and DST store paths")?;
+            Command::Reindex { src: src.into(), dst: dst.into(), merge: !f.no_merge }
+        }
+        Some("eval") => {
+            db_if(&mut pos, n, 0);
+            let queries = f.queries.ok_or("eval needs --queries <file.tsv>")?;
+            Command::Eval { queries: queries.into(), top_k: f.agent.top_k.unwrap_or(10) as usize }
+        }
+        Some("usage") => {
+            db_if(&mut pos, n, 0);
+            Command::Usage { limit: f.agent.limit.unwrap_or(15) as usize }
         }
         Some(v @ ("stats" | "dump" | "repair" | "synth")) => {
             db_if(&mut pos, n, 0);

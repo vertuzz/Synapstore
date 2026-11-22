@@ -32,6 +32,12 @@ struct Caller {
     info: Option<TokenInfo>,
 }
 
+impl Caller {
+    fn name(&self) -> String {
+        self.info.as_ref().map_or_else(|| "anonymous".into(), |i| i.name.clone())
+    }
+}
+
 fn rpc_error(status: u16, code: i64, msg: &str) -> Response {
     Response::json(status, &jsonrpc::error(Value::Null, code, msg, None))
 }
@@ -182,7 +188,8 @@ impl App {
         let is_init = |m: &Value| m.get("method").and_then(Value::as_str) == Some("initialize");
         let initializing = is_init(&msg) || msg.as_array().is_some_and(|b| b.iter().any(is_init));
         let (reply, session_id) = if initializing {
-            let mut server = Server::scoped(self.store.clone(), caller.scope);
+            let mut server =
+                Server::scoped(self.store.clone(), caller.scope).with_client(&caller.name(), self.opts.usage_log);
             let reply = server.handle_json(msg);
             (reply, self.sessions.create(server, caller.token))
         } else if let Some(id) = req.header(SESSION_HEADER) {
@@ -193,7 +200,12 @@ impl App {
             (reply, None)
         } else {
             // Stateless use (no session): a fresh server per request.
-            (Server::scoped(self.store.clone(), caller.scope).handle_json(msg), None)
+            (
+                Server::scoped(self.store.clone(), caller.scope)
+                    .with_client(&caller.name(), self.opts.usage_log)
+                    .handle_json(msg),
+                None,
+            )
         };
         let mut resp = match reply {
             Some(v) => Response::json(200, &v),

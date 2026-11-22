@@ -6,11 +6,12 @@
 //! * [`bert`] — neural sentence embeddings (MiniLM, BGE, …) run on the CPU
 //!   in pure Rust; weights are fetched once by [`fetch`].
 //! * [`remote`] — any OpenAI-compatible `/v1/embeddings` endpoint
-//!   (Ollama, llama.cpp, vLLM, TEI, OpenAI, …).
+//!   (Ollama, llama.cpp, vLLM, TEI, OpenAI, OpenRouter, …).
 
 pub mod bert;
 pub mod curl;
 pub mod fetch;
+pub mod http;
 pub mod lexical;
 pub mod remote;
 
@@ -114,6 +115,9 @@ impl EmbedderSpec {
             "" | "auto" => EmbedderSpec::Auto,
             "lexical" | "builtin" | "hash" => EmbedderSpec::Lexical,
             _ if s.starts_with("openai:") => EmbedderSpec::Remote(remote::RemoteConfig::parse(&s[7..])?),
+            _ if s.starts_with("openrouter:") => {
+                EmbedderSpec::Remote(remote::RemoteConfig::parse_for(&s[11..], remote::Provider::OpenRouter)?)
+            }
             _ => EmbedderSpec::Model(s.to_string()),
         })
     }
@@ -124,7 +128,7 @@ impl EmbedderSpec {
             EmbedderSpec::Auto => None,
             EmbedderSpec::Lexical => Some("lexical".into()),
             EmbedderSpec::Model(m) => Some(m.clone()),
-            EmbedderSpec::Remote(r) => Some(format!("openai:{}", r.label())),
+            EmbedderSpec::Remote(r) => Some(r.spec()),
             EmbedderSpec::Custom(e) => Some(format!("custom:{}", e.source())),
         }
     }
@@ -132,10 +136,24 @@ impl EmbedderSpec {
     /// Instantiate. `lexical_dim` sizes the lexical embedder; `progress`
     /// receives human-readable status lines (model downloads).
     pub fn build(&self, lexical_dim: usize, progress: &dyn Fn(&str)) -> Result<Arc<dyn Embedder>> {
+        self.build_in(lexical_dim, None, progress)
+    }
+
+    /// [`build`](Self::build) for a store that records `(source, dim)`: a
+    /// remote embedder of that space starts without probing the network.
+    pub fn build_in(
+        &self,
+        lexical_dim: usize,
+        recorded: Option<(&str, usize)>,
+        progress: &dyn Fn(&str),
+    ) -> Result<Arc<dyn Embedder>> {
         Ok(match self {
             EmbedderSpec::Auto | EmbedderSpec::Lexical => Arc::new(Lexical { dim: lexical_dim }),
             EmbedderSpec::Model(name) => Arc::new(fetch::load_model(name, progress)?),
-            EmbedderSpec::Remote(cfg) => Arc::new(remote::RemoteEmbedder::connect(cfg.clone())?),
+            EmbedderSpec::Remote(cfg) => {
+                let dim = recorded.filter(|(src, d)| *src == cfg.source(*d)).map(|(_, d)| d);
+                Arc::new(remote::RemoteEmbedder::with_dim(cfg.clone(), dim)?)
+            }
             EmbedderSpec::Custom(e) => e.clone(),
         })
     }
@@ -168,5 +186,7 @@ mod tests {
         assert_eq!(EmbedderSpec::parse("minilm").unwrap().label().unwrap(), "minilm");
         let r = EmbedderSpec::parse("openai:nomic-embed-text@http://localhost:11434/v1").unwrap();
         assert_eq!(r.label().unwrap(), "openai:nomic-embed-text@http://localhost:11434/v1");
+        let o = EmbedderSpec::parse("openrouter:perplexity/pplx-embed-v1-4b").unwrap();
+        assert_eq!(o.label().unwrap(), "openrouter:perplexity/pplx-embed-v1-4b");
     }
 }

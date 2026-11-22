@@ -37,6 +37,13 @@ SERVERS AND ADMIN ([DB] defaults like above):
     synapstore stats [DB] [--detailed]    Print store statistics as JSON
     synapstore dump [DB] [--vectors]      Export every table as JSON lines to stdout
     synapstore repair [DB]                Reconnect unreachable HNSW nodes
+    synapstore reindex <SRC> <DST> --embedder <SPEC> [--no-merge]
+                                          Rebuild a store into a new file with another embedder
+                                          (keeps facts, events, tokens; SRC is only read)
+    synapstore eval [DB] --queries <FILE.tsv> [-k N]
+                                          Recall regression check: `query<TAB>snippet|snippet`
+    synapstore usage [DB] [--limit N]     Who called what, weakest queries, never-recalled memories
+                                          (needs `serve --usage-log`)
     synapstore synth [DB] [--records N] [--seed S] [--dim D]
                                           Load a synthetic agent-memory dataset
     synapstore --version | --help
@@ -51,6 +58,9 @@ EMBEDDINGS:
                               <DIR>              a local model directory
                               openai:<model>[@<base-url>]  OpenAI-compatible endpoint
                                                  (Ollama: openai:nomic-embed-text@http://localhost:11434/v1)
+                              openrouter:<model> OpenRouter, zero-data-retention providers only
+                                                 (key: OPENROUTER_API_KEY), e.g.
+                                                 openrouter:perplexity/pplx-embed-v1-4b
     --dim <N>               Lexical embedder dimension for a new store (default 384)
 
 HTTP SERVER (serve --listen):
@@ -60,6 +70,7 @@ HTTP SERVER (serve --listen):
     --max-body-mb <N>       Request size limit (default 8)
     --trust-proxy           Use X-Forwarded-For for the client address (behind a proxy)
     --no-auth               Disable token auth (refused unless bound to 127.0.0.1/::1)
+    --usage-log             Record tool calls per client in the store (`synapstore usage`)
 
 OPTIONS:
     --db <FILE>             Store file for any command
@@ -73,5 +84,7 @@ OPTIONS:
     --ef-construction <N>   HNSW build beam width, fixed at creation (default 100)
     --half-life-days <X>    Time-decay half-life (default 30)
     --no-decay              Disable time-decay
+    --decay-tags <LIST>     Only memories with one of these tags decay (comma list, `x*` =
+                            prefix); others rank by similarity alone (default: all decay)
     --cache-mb <N>          redb page cache (default 256)
 ";

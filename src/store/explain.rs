@@ -2,7 +2,7 @@
 //! returned for a query — exact rank, HNSW reachability, decay, filters.
 
 use super::SynapStore;
-use super::recall::{query_vector, rank};
+use super::recall::{RankOpts, query_vector, rank};
 use super::types::hex;
 use crate::archive;
 use crate::decay::{self, DAY_MS};
@@ -113,7 +113,12 @@ impl SynapStore {
         let now = q.now_ms.unwrap_or_else(now_ms);
         let decay_p = self.config().decay;
         if let Some(g) = chunks.get(q.target)? {
-            let age = decay::age(now, archive::view::<Chunk>(g.value())?.updated_at.to_native());
+            let c = archive::view::<Chunk>(g.value())?;
+            let age = decay::age(now, c.updated_at.to_native());
+            let decay_p = decay::params_for(
+                &decay_p,
+                decay::decays(&self.config().decay_tags, c.tags.iter().map(|t| t.as_str())),
+            );
             let sim = ex.exact_similarity.unwrap_or(0.0);
             ex.age_days = Some(age as f64 / DAY_MS as f64);
             ex.decay_factor = Some(decay::factor(sim, age, &decay_p));
@@ -126,7 +131,9 @@ impl SynapStore {
             let cands = hnsw::knn(&view, ep, &unit, top_k, ex.ef, &mut visited)?;
             ex.hnsw_candidates = cands.len();
             ex.hnsw_rank = cands.iter().position(|c| c.id == q.target).map(|p| p + 1);
-            let ranked = rank(&chunks, &cands, now, &decay_p, q.max_age_ms, &[], self.metrics())?;
+            let decay_tags = &self.config().decay_tags;
+            let opts = RankOpts { now, decay: &self.config().decay, decay_tags, max_age_ms: q.max_age_ms, tags: &[] };
+            let ranked = rank(&chunks, &cands, &opts, self.metrics())?;
             ex.final_rank = ranked.iter().position(|r| r.id == q.target).map(|p| p + 1);
         }
         ex.verdict = verdict(&ex);

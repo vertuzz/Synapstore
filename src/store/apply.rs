@@ -31,6 +31,9 @@ pub enum WriteOp {
     Repair,
     /// API-token administration.
     Auth(crate::auth::AuthOp),
+    /// Records copied verbatim from another store (`reindex`).
+    Import(Vec<super::import::ImportOp>),
+    Usage(Box<super::usage::UsageRecord>),
     /// Several operations committed atomically together.
     Batch(Vec<WriteOp>),
 }
@@ -44,6 +47,8 @@ pub enum WriteResult {
     Forget(ForgetOutcome),
     Repair(RepairOutcome),
     Auth(crate::auth::AuthResult),
+    Import(usize),
+    Usage,
     Batch(Vec<WriteResult>),
 }
 
@@ -83,6 +88,8 @@ pub fn apply(txn: &WriteTransaction, op: &WriteOp, ctx: &ApplyCtx<'_>) -> Result
             apply_forget(txn, ids).map(WriteResult::Forget)
         }
         WriteOp::Auth(op) => crate::auth::ops::apply(txn, op).map(WriteResult::Auth),
+        WriteOp::Import(ops) => super::import::apply(txn, ops, ctx).map(WriteResult::Import),
+        WriteOp::Usage(r) => super::usage::apply(txn, r).map(|_| WriteResult::Usage),
         WriteOp::Repair => {
             sync_cache(txn, ctx)?;
             let vectors = txn.open_table(VECTORS)?;
@@ -100,7 +107,7 @@ pub fn apply(txn: &WriteTransaction, op: &WriteOp, ctx: &ApplyCtx<'_>) -> Result
 
 /// Pin the store's vector space (embedding source + dimension) on first use.
 /// The source is checked first: it is the more actionable error.
-fn check_space(txn: &WriteTransaction, dim: usize, source: &str) -> Result<()> {
+pub(super) fn check_space(txn: &WriteTransaction, dim: usize, source: &str) -> Result<()> {
     let mut ms = txn.open_table(META_STR)?;
     match meta_str_get(&ms, keys::EMBEDDING_SOURCE)? {
         Some(s) if s != source => {
@@ -231,7 +238,7 @@ fn apply_memorize(txn: &WriteTransaction, m: &PreparedMemorize, ctx: &ApplyCtx<'
     Ok(out)
 }
 
-fn note_repair(m: &Metrics, o: &RepairOutcome) {
+pub(super) fn note_repair(m: &Metrics, o: &RepairOutcome) {
     Metrics::add(&m.counters.hnsw_repairs, 1);
     Metrics::add(&m.counters.hnsw_repair_links, o.links_added);
 }
@@ -250,7 +257,7 @@ fn apply_facts(txn: &WriteTransaction, facts: &[FactInput], ts: u64, source: u64
     Ok(created)
 }
 
-fn append_event(txn: &WriteTransaction, e: &PreparedEvent) -> Result<()> {
+pub(super) fn append_event(txn: &WriteTransaction, e: &PreparedEvent) -> Result<()> {
     let mut t = txn.open_table(EPISODES)?;
     let item = MemoryItem { ts: e.ts, id: e.id, kind: e.kind.clone(), text: e.text.clone(), chunk_id: e.chunk_id };
     t.insert((e.ts, e.id), encode(&item)?.as_slice())?;

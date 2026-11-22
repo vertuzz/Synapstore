@@ -83,6 +83,31 @@ pub fn age(now_ms: u64, updated_at: u64) -> u64 {
     now_ms.saturating_sub(updated_at)
 }
 
+/// Does a memory carrying `tags` decay? With no `patterns` every memory
+/// does (the default); otherwise only those with a matching tag, so durable
+/// knowledge is ranked by similarity alone. A pattern ending in `*` matches
+/// by prefix; case is ignored.
+pub fn decays<'a>(patterns: &[String], tags: impl IntoIterator<Item = &'a str>) -> bool {
+    if patterns.is_empty() {
+        return true;
+    }
+    tags.into_iter().any(|t| {
+        let t = t.to_ascii_lowercase();
+        patterns.iter().any(|p| {
+            let p = p.trim().to_ascii_lowercase();
+            match p.strip_suffix('*') {
+                Some(pre) => t.starts_with(pre),
+                None => t == p,
+            }
+        })
+    })
+}
+
+/// `p` for a memory that decays, decay switched off otherwise.
+pub fn params_for(p: &DecayParams, decays: bool) -> DecayParams {
+    if decays { *p } else { DecayParams { enabled: false, ..*p } }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,6 +159,20 @@ mod tests {
         let off = DecayParams { enabled: false, ..p };
         assert_eq!(factor(0.5, 1000 * DAY_MS, &off), 1.0);
         assert_eq!(score(-0.3, 1000 * DAY_MS, &p), -0.3);
+    }
+
+    #[test]
+    fn decay_tags_select_volatile_memories() {
+        let pats = vec!["status".to_string(), "ibkr-week*".to_string()];
+        assert!(decays(&[], ["anything"]));
+        assert!(decays(&[], []));
+        assert!(decays(&pats, ["family", "Status"]));
+        assert!(decays(&pats, ["ibkr-week-47"]));
+        assert!(!decays(&pats, ["family", "statuses"]));
+        assert!(!decays(&pats, []));
+        let p = DecayParams::default();
+        assert_eq!(factor(0.5, 400 * DAY_MS, &params_for(&p, false)), 1.0);
+        assert!(factor(0.5, 400 * DAY_MS, &params_for(&p, true)) < 1.0);
     }
 
     #[test]

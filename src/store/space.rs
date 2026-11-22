@@ -46,7 +46,8 @@ pub fn resolve(rec: &Recorded, cfg: &Config, log: &Log) -> Result<Arc<dyn Embedd
             eprintln!("synapstore: {m}");
         }
     };
-    let e = spec.build(lexical_dim, &progress)?;
+    let known = rec.source.as_deref().zip(rec.dim);
+    let e = spec.build_in(lexical_dim, known, &progress)?;
     match rec.source.as_deref() {
         Some(src) if src != SOURCE_EXTERNAL && src != e.source() && !matches!(cfg.embedder, EmbedderSpec::Auto) => {
             let was = rec.spec.clone().unwrap_or_else(|| src.to_string());

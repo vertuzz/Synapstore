@@ -85,6 +85,17 @@ pub fn prepare_event(e: &EventInput, now: u64) -> Result<PreparedEvent> {
     })
 }
 
+/// Characters per chunk: local models are capped at `max_chunk_chars`;
+/// remote models keep their (much larger) preference, so a memory usually
+/// stays one chunk and recall returns it whole.
+pub fn chunk_size(embedder: &dyn Embedder, max_chunk_chars: usize) -> usize {
+    match embedder.chunk_chars() {
+        Some(c) if embedder.source().starts_with("remote:") => c.max(max_chunk_chars),
+        Some(c) => c.min(max_chunk_chars),
+        None => max_chunk_chars,
+    }
+}
+
 /// Validate and expand a `memorize` request; text without a caller vector
 /// is chunked and embedded with `embedder` (on the caller's thread).
 pub fn prepare_memorize(
@@ -101,7 +112,7 @@ pub fn prepare_memorize(
             (vec![PreparedChunk { id: chunk_id(&text), text, unit }], SOURCE_EXTERNAL.to_string())
         }
         None => {
-            let size = embedder.chunk_chars().map_or(max_chunk_chars, |c| c.min(max_chunk_chars));
+            let size = chunk_size(embedder, max_chunk_chars);
             let texts = chunk_text(&input.text, size);
             let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
             let vecs = embedder.embed_documents(&refs)?;

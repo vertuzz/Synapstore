@@ -181,7 +181,7 @@ fn remote_call(url: &str, token: Option<String>, tool: &str, args: &Value) -> Re
     let token = std::env::var("SYNAPSTORE_TOKEN").ok().filter(|t| !t.is_empty()).or(token);
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": args}});
     let url = endpoint(url);
-    let (status, raw) = crate::embed::remote::post_json(&url, token.as_deref(), &body.to_string())
+    let (status, raw) = crate::embed::http::post_json(&url, token.as_deref(), &body.to_string())
         .map_err(|e| e.to_string().replace("invalid input: embedding endpoint: ", ""))?;
     match status {
         200 => {}

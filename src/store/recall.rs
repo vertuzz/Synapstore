@@ -59,16 +59,20 @@ pub struct Ranked {
     pub age_ms: u64,
 }
 
+/// How candidates are filtered and scored.
+#[derive(Debug, Clone, Copy)]
+pub struct RankOpts<'a> {
+    pub now: u64,
+    pub decay: &'a DecayParams,
+    /// Only memories with one of these tags decay (empty = all).
+    pub decay_tags: &'a [String],
+    pub max_age_ms: Option<u64>,
+    /// Keep only memories with one of these tags (empty = all).
+    pub tags: &'a [String],
+}
+
 /// Filter (tombstones, `max_age`, tags) and score candidates; sorted by score.
-pub fn rank<C>(
-    chunks: &C,
-    cands: &[Scored],
-    now: u64,
-    p: &DecayParams,
-    max_age_ms: Option<u64>,
-    tags: &[String],
-    metrics: &Metrics,
-) -> Result<Vec<Ranked>>
+pub fn rank<C>(chunks: &C, cands: &[Scored], o: &RankOpts<'_>, metrics: &Metrics) -> Result<Vec<Ranked>>
 where
     C: ReadableTable<u64, &'static [u8]>,
 {
@@ -77,21 +81,22 @@ where
         let Some(g) = chunks.get(c.id)? else { continue };
         let chunk = archive::view::<Chunk>(g.value())?;
         Metrics::add(&metrics.counters.zero_copy_reads, 1);
-        let age_ms = decay::age(now, chunk.updated_at.to_native());
-        if max_age_ms.is_some_and(|m| age_ms > m) {
+        let age_ms = decay::age(o.now, chunk.updated_at.to_native());
+        if o.max_age_ms.is_some_and(|m| age_ms > m) {
             continue;
         }
-        if !tags.is_empty() && !chunk.tags.iter().any(|t| tags.iter().any(|w| w.eq_ignore_ascii_case(t.as_str()))) {
+        if !o.tags.is_empty() && !chunk.tags.iter().any(|t| o.tags.iter().any(|w| w.eq_ignore_ascii_case(t.as_str()))) {
             continue;
         }
-        let factor = decay::factor(c.sim, age_ms, p);
-        out.push(Ranked { id: c.id, sim: c.sim, score: decay::score(c.sim, age_ms, p), factor, age_ms });
+        let p = decay::params_for(o.decay, decay::decays(o.decay_tags, chunk.tags.iter().map(|t| t.as_str())));
+        let factor = decay::factor(c.sim, age_ms, &p);
+        out.push(Ranked { id: c.id, sim: c.sim, score: decay::score(c.sim, age_ms, &p), factor, age_ms });
     }
     out.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.id.cmp(&b.id)));
     Ok(out)
 }
 
-fn hit<C, T>(chunks: &C, terms: &T, r: &Ranked) -> Result<Option<RecallHit>>
+pub(super) fn hit<C, T>(chunks: &C, terms: &T, r: &Ranked) -> Result<Option<RecallHit>>
 where
     C: ReadableTable<u64, &'static [u8]>,
     T: ReadableTable<u64, &'static [u8]>,
@@ -144,7 +149,12 @@ impl SynapStore {
         else {
             return Ok(RecallOutcome { embedding: "none".into(), ..Default::default() });
         };
-        let unit = query_vector(q.vector.as_deref(), q.text.as_deref(), dim as usize, &src, self.embedder())?;
+        let unit = match query_vector(q.vector.as_deref(), q.text.as_deref(), dim as usize, &src, self.embedder()) {
+            Ok(u) => u,
+            // The embedding endpoint is down: answer from words rather than fail.
+            Err(Error::Embedding(why)) => return self.lexical_fallback(q, &txn, why),
+            Err(e) => return Err(e),
+        };
         let Some(ep) = EntryPoint::load(&meta)? else {
             return Ok(RecallOutcome { embedding: src, ..Default::default() });
         };
@@ -161,7 +171,9 @@ impl SynapStore {
         let (ranked, ncand) = loop {
             let cands = hnsw::knn(&view, ep, &unit, top_k, ef, &mut visited)?;
             Metrics::add(&counters.hnsw_searches, 1);
-            let ranked = rank(&chunks, &cands, now, &decay_p, q.max_age_ms, &q.tags, self.metrics())?;
+            let opts =
+                RankOpts { now, decay: &decay_p, decay_tags: &cfg.decay_tags, max_age_ms: q.max_age_ms, tags: &q.tags };
+            let ranked = rank(&chunks, &cands, &opts, self.metrics())?;
             // Filters may starve the result: widen the beam and retry.
             if ranked.len() >= top_k || cands.len() < ef || ef >= MAX_EF {
                 break (ranked, cands.len());
@@ -175,6 +187,6 @@ impl SynapStore {
                 hits.push(h);
             }
         }
-        Ok(RecallOutcome { hits, candidates: ncand, visited, ef, embedding: src })
+        Ok(RecallOutcome { hits, candidates: ncand, visited, ef, embedding: src, warning: None })
     }
 }

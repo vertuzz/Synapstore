@@ -8,6 +8,8 @@ pub mod tools;
 
 use crate::auth::{Scope, tool_scope};
 use crate::store::SynapStore;
+use crate::store::usage::UsageRecord;
+use crate::timefmt::now_ms;
 use handlers::Call;
 use jsonrpc::{Incoming, classify, error, success};
 use serde_json::{Value, json};
@@ -17,7 +19,7 @@ use std::io::{BufRead, Write};
 pub const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 const INSTRUCTIONS: &str = "SynapStore is your long-term memory. Use `memorize` to store facts, decisions and \
-observations, `recall` to search semantically (fresh memories rank higher), `graph_query` to get everything known \
+observations, `recall` to search semantically (recent short-lived notes rank higher), `graph_query` to get everything known \
 about an entity, and `log_event` / `recent_events` for the episodic timeline. Use `explain` when an expected memory \
 is not recalled.\n\nThe knowledge graph is only as good as the `facts` you pass: the store never extracts them from \
 text. Whenever a memory states a durable relation (people and their roles, family, places, employers, ownership, \
@@ -25,13 +27,21 @@ projects and their stack, key dates), add it to `memorize` as [subject, predicat
 names (`graph_match` shows them) and short snake_case predicates (works_at, parent_of, lives_in, owns, uses). Do not \
 turn fast-changing state (prices, daily status) into facts. When something changes or was wrong, memorize the \
 corrected text with the old memory's id in `supersedes`: the old memory and its facts are removed atomically. For a \
-fact added without a memory, `retract_fact` the old one before adding the new one.";
+fact added without a memory, `retract_fact` the old one before adding the new one.\n\nTag short-lived notes (status, \
+plan, todo, news, snapshot, progress) so they can fade with age; durable knowledge keeps its rank. When one entity \
+has several names or spellings (Robert / Bob), link them with a fact [alias, same_as, canonical name] so \
+`graph_query` reaches both.";
 
 pub struct Server {
     store: SynapStore,
     protocol: Option<String>,
     /// Permissions of the caller; `None` = unrestricted (stdio).
     scope: Option<Scope>,
+    /// Who is calling: the token name (or `stdio`), plus `clientInfo.name`.
+    client: String,
+    app: Option<String>,
+    /// Record tool calls in the store's usage log.
+    usage: bool,
 }
 
 /// Pick the protocol version to answer `initialize` with.
@@ -41,12 +51,26 @@ pub fn negotiate(requested: Option<&str>) -> &'static str {
 
 impl Server {
     pub fn new(store: SynapStore) -> Self {
-        Server { store, protocol: None, scope: None }
+        Server { store, protocol: None, scope: None, client: "stdio".into(), app: None, usage: false }
     }
 
     /// A server whose tools are limited to what `scope` allows.
     pub fn scoped(store: SynapStore, scope: Scope) -> Self {
-        Server { store, protocol: None, scope: Some(scope) }
+        Server { scope: Some(scope), ..Server::new(store) }
+    }
+
+    /// Name the caller (for logs) and choose whether to record usage.
+    pub fn with_client(mut self, client: &str, usage: bool) -> Self {
+        self.client = client.to_string();
+        self.usage = usage;
+        self
+    }
+
+    fn who(&self) -> String {
+        match &self.app {
+            Some(a) => format!("{}/{a}", self.client),
+            None => self.client.clone(),
+        }
     }
 
     fn allowed(&self, tool: &str) -> bool {
@@ -102,6 +126,8 @@ impl Server {
             "initialize" => {
                 let v = negotiate(params.get("protocolVersion").and_then(Value::as_str));
                 self.protocol = Some(v.to_string());
+                self.app =
+                    params.pointer("/clientInfo/name").and_then(Value::as_str).map(|s| s.chars().take(64).collect());
                 success(
                     id,
                     json!({
@@ -150,7 +176,11 @@ impl Server {
                 }),
             );
         }
-        match handlers::call(&self.store, name, &args) {
+        let result = handlers::call(&self.store, name, &args);
+        if let Call::Done(r) = &result {
+            self.note_call(name, &args, r);
+        }
+        match result {
             Call::UnknownTool => error(id, jsonrpc::INVALID_PARAMS, &format!("unknown tool: {name}"), None),
             Call::Done(Ok(value)) => {
                 let text = serde_json::to_string_pretty(&value).unwrap_or_default();
@@ -171,6 +201,30 @@ impl Server {
                     "isError": true,
                 }),
             ),
+        }
+    }
+}
+
+impl Server {
+    /// Log the call (and record it when usage logging is on).
+    fn note_call(&self, tool: &str, args: &Value, r: &crate::Result<Value>) {
+        let who = self.who();
+        let mut rec =
+            UsageRecord { ts: now_ms(), client: who.clone(), tool: tool.into(), ok: r.is_ok(), ..Default::default() };
+        let mut fields = vec![("client", who), ("tool", tool.to_string()), ("ok", r.is_ok().to_string())];
+        if let (Ok(v), "recall") = (r, tool) {
+            let hits = v["hits"].as_array().map(Vec::as_slice).unwrap_or_default();
+            rec.hits = hits.iter().filter_map(|h| h["id"].as_str().map(str::to_string)).collect();
+            rec.top_similarity = hits.first().and_then(|h| h["similarity"].as_f64()).map(|s| s as f32);
+            rec.embedding = v["embedding"].as_str().map(str::to_string);
+            rec.query = args["query"].as_str().map(str::to_string);
+            fields.push(("hits", hits.len().to_string()));
+            fields.push(("top_similarity", rec.top_similarity.map_or("-".into(), |s| format!("{s:.3}"))));
+            fields.push(("embedding", rec.embedding.clone().unwrap_or_default()));
+        }
+        self.store.log().info("tool", &fields);
+        if self.usage {
+            self.store.record_usage(rec);
         }
     }
 }

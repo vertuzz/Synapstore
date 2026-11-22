@@ -42,6 +42,9 @@ pub enum Error {
     #[error("writer thread is unavailable: {0}")]
     WriterGone(String),
 
+    #[error("embedding endpoint: {0}")]
+    Embedding(String),
+
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -61,6 +64,7 @@ impl Error {
             Error::NotFound(_) => "not_found",
             Error::EmbeddingMismatch { .. } => "embedding_mismatch",
             Error::WriterGone(_) => "writer_gone",
+            Error::Embedding(_) => "embedding_unavailable",
             Error::Io(_) => "io",
         }
     }

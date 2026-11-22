@@ -62,6 +62,7 @@ impl SynapStore {
                 "facts": txn.open_table(TRIPLES)?.len()?,
                 "entity_links": txn.open_table(ENTITY_CHUNKS)?.len()?,
                 "episodes": txn.open_table(EPISODES)?.len()?,
+                "auth_tokens": txn.open_table(crate::tables::AUTH_TOKENS)?.len()?,
             },
             "index": index,
             "decay": {
@@ -70,6 +71,7 @@ impl SynapStore {
                 "floor": d.floor,
                 "boost": d.boost,
                 "protect": [d.protect_lo, d.protect_hi],
+                "only_tags": cfg.decay_tags,
             },
             "metrics": self.metrics().snapshot(),
         }))
