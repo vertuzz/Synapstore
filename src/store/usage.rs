@@ -101,7 +101,7 @@ impl SynapStore {
             let (k, v) = item?;
             counted.push((k.value(), v.value()));
         }
-        counted.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+        counted.sort_by_key(|a| std::cmp::Reverse(a.1.0));
         let mut most = Vec::new();
         for (id, (n, last)) in counted.iter() {
             if most.len() >= limit {
